@@ -1,0 +1,16 @@
+{
+  "case": "Volve injection-production record",
+  "case_role": "Real-field forecasting diagnostic and candidate-decision demonstration; not the definition of the academic problem.",
+  "case_history_length": 10,
+  "case_horizon": 8,
+  "n_case_windows": 400,
+  "rolling_origin_folds": 4,
+  "response_normalization": "Production change relative to the median of the latest four history weeks, scaled by that level plus 5000 m3.",
+  "prediction_support": "Predictions are restricted to the 2.5th--97.5th percentile of production observed in the corresponding training period.",
+  "case_context_selection": "The latest eligible decision window whose median field oil over the latest four history steps is at least 20000 m3.",
+  "best_mean_rolling_nmae_model": "ACTRN",
+  "actrn_field_superiority": true,
+  "decision_candidate_library_size": 38,
+  "decision_budget_m3": 514860.4781008877,
+  "decision_evidence": "The field response model predicts changes from the latest production level for supported candidate schedules; no realized counterfactual field outcome is available for the alternative schedule."
+}

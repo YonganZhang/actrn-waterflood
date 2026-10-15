@@ -1,0 +1,6 @@
+__pycache__/
+.venv/
+results_rerun/
+data/raw/
+paper/fuel_2026/
+_outputs/

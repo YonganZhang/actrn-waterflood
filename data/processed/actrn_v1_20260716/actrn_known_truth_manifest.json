@@ -1,0 +1,36 @@
+{
+  "academic_task": "Predict multi-horizon production under candidate multi-injector sequences and select the fixed-budget sequence that maximizes cumulative production.",
+  "method": "Action-Conditioned Temporal Response Network (ACTRN)",
+  "history_length": 10,
+  "forecast_horizon": 8,
+  "injectors": 2,
+  "producers": 3,
+  "n_repeats": 5,
+  "n_reservoirs_per_repeat": 48,
+  "group_split": {
+    "train": 32,
+    "validation": 8,
+    "test": 8
+  },
+  "samples_per_reservoir": 108,
+  "plans_per_context": 6,
+  "decision_contexts_per_test_reservoir": 4,
+  "decision_candidates_per_context": 80,
+  "decision_domain": "Candidate schedules share an identical total-injection budget within each decision context.",
+  "objective": "maximum cumulative oil production over the case horizon",
+  "baselines": [
+    "Ridge",
+    "Random forest",
+    "HGB",
+    "MLP"
+  ],
+  "best_prediction_baseline": "Ridge",
+  "best_decision_baseline": "HGB",
+  "actrn_nmae_reduction_vs_best_baseline_pct": 5.0110597322358315,
+  "actrn_regret_reduction_vs_best_baseline_pct": 13.269975071823703,
+  "actrn_prediction_wins": 3,
+  "actrn_decision_wins": 4,
+  "repeat_count": 5,
+  "advantage_status": "SUPPORTED_ON_KNOWN_TRUTH_BENCHMARK",
+  "scope": "The advantage statement applies to the registered known-truth benchmark; the field case is evaluated separately."
+}

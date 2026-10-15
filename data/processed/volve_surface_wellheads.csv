@@ -1,0 +1,8 @@
+well,role,npd_id,coordinate_scope,geodetic_datum,latitude_deg,longitude_deg,utm_zone,utm_northing_m,utm_easting_m,source_url,accessed_date
+15/9-F-4,injector,5693,surface_wellhead,ED50,58.441589,1.887478,31,6478560.84,435049.84,https://factpages.sodir.no/en/wellbore/PageView/Development/All/5693,2026-07-15
+15/9-F-5_inj,injector,5769,surface_wellhead,ED50,58.441572,1.887497,31,6478558.97,435050.94,https://factpages.sodir.no/en/wellbore/PageView/Development/All/5769,2026-07-15
+15/9-F-1 C,producer,7405,surface_wellhead,ED50,58.441642,1.887419,31,6478566.77,435046.53,https://factpages.sodir.no/en/wellbore/PageView/Development/All/7405,2026-07-15
+15/9-F-11,producer,7078,surface_wellhead,ED50,58.441656,1.887464,31,6478568.28,435049.15,https://factpages.sodir.no/en/wellbore/PageView/Development/All/7078,2026-07-15
+15/9-F-12,producer,5599,surface_wellhead,ED50,58.441636,1.887483,31,6478566.09,435050.25,https://factpages.sodir.no/en/wellbore/PageView/Development/All/5599,2026-07-15
+15/9-F-14,producer,5351,surface_wellhead,ED50,58.441603,1.887522,31,6478562.34,435052.46,https://factpages.sodir.no/en/wellbore/PageView/Development/All/5351,2026-07-15
+15/9-F-15 D,producer,7289,surface_wellhead,ED50,58.441586,1.887542,31,6478560.47,435053.56,https://factpages.sodir.no/en/wellbore/PageView/Development/All/7289,2026-07-15
