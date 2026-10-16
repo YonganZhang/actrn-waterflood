@@ -396,10 +396,12 @@ def supplementary(R) -> None:
 
     cost = fit_minutes(R["runs"])
     body = [f"{NAME[f]} & {cost['base'][f]:.1f} & {cost['channel'][f]:.1f} \\\\" for f in FAMILIES]
-    (OUT / "supp_cost.tex").write_text(_longtable(
-        "lrr", "Time to fit the nine candidates of each model family and predict the validation "
-        "and test data (median minutes per repeat, one CPU thread).", "tab:s-cost",
-        "Model & Base population & Channelised population", body))
+    (OUT / "supp_cost.tex").write_text("\n".join(
+        ["\\begin{table}[h]", "\\centering",
+         "\\caption{Time to fit the nine candidates of each model family and predict the "
+         "validation and test data (median minutes per repeat, one CPU thread).}\\label{tab:s-cost}",
+         "\\begin{tabular}{lrr}", "\\toprule", "Model & Base population & Channelised population \\\\",
+         "\\midrule"] + body + ["\\bottomrule", "\\end{tabular}", "\\end{table}"]) + "\n")
 
     s, n = R["summary"], R["nmae_sel"]
     body = []
