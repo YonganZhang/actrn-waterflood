@@ -446,7 +446,7 @@ def hbox_strip(ax, runs, metric, pos, spans, labels=True):
     families = list(pos)
     data = [runs.loc[runs["family"] == f, metric].to_numpy() for f in families]
     group_bands(ax, spans, label=labels)
-    box = ax.boxplot(data, positions=[pos[f] for f in families], vert=False, widths=0.62,
+    box = ax.boxplot(data, positions=[pos[f] for f in families], orientation="horizontal", widths=0.62,
                      patch_artist=True, showfliers=False,
                      medianprops={"color": DARK, "linewidth": 1.0},
                      whiskerprops={"color": "#777777", "linewidth": 0.7},
@@ -517,7 +517,7 @@ def hviolin(ax, decisions, pos, spans, refs, labels=True):
     group_bands(ax, spans, label=labels)
     for f in pos:
         v = decisions.loc[decisions["family"] == f, "decision_regret_pct"].to_numpy()
-        parts = ax.violinplot(v, positions=[pos[f]], vert=False, widths=0.82, showextrema=False)
+        parts = ax.violinplot(v, positions=[pos[f]], orientation="horizontal", widths=0.82, showextrema=False)
         for body in parts["bodies"]:
             body.set_facecolor(COLOR[f])
             body.set_edgecolor(COLOR[f])
