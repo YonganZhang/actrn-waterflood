@@ -1,0 +1,31 @@
+{
+  "protocol": "_wiki-methodology/_top/_decisions/_0007-actrn-field-case-equal-budget.md",
+  "protocol_sha256": "8e629c3659df0b63498b42f8d7c9353255512b2026131f1638f7a7a4932c3832",
+  "budget_rule": "implemented",
+  "environment": {
+    "python": "3.11.15",
+    "packages": {
+      "numpy": "2.4.6",
+      "pandas": "3.0.6",
+      "scikit-learn": "1.9.1",
+      "scipy": "1.17.1",
+      "pyarrow": "26.0.0"
+    },
+    "git_commit": "49c4ea2f8939ebd9f78eb114ab48a75cd2ba42a1",
+    "code_dirty": true,
+    "code_dirty_paths": [
+      "D code/render_figures_tnr.py"
+    ]
+  },
+  "wall_seconds": 6.933611611137167,
+  "seeds": {
+    "field_case_model": 747
+  },
+  "outputs": {
+    "field_case_backtest.csv": "a6316cc76f3c830aa72989b6448db4fe55195bf874828ea302cde6a5988d52ca",
+    "field_case_candidates.csv": "e0e8fd52b3d9afe8098a7292b8acbcfa76006d370cf3df45856d4462d974424e",
+    "field_case_decision.csv": "bf8b881bfd47983d1637c625feb2fa0f7c098869d7df31361c4debf6c318fe06",
+    "field_case_summary.json": "bd2cf5777507a5129b2a88320a92cfd6b0ef30af0545914b07deb063f9826f1b"
+  },
+  "command": "python code/actrn_field_case.py --budget implemented --protocol _wiki-methodology/_top/_decisions/_0007-actrn-field-case-equal-budget.md --out data/processed/actrn_v4_case"
+}

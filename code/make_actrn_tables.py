@@ -2,7 +2,7 @@
 
 Deep sequence baselines and the sensitivity runs come from the v4 extension (ADR-0005); the
 Autoformer rows come from its corrected rerun (ADR-0006), which supersedes the Autoformer rows of
-the extension.
+the extension. The field decision example comes from its equal-budget run (ADR-0007).
 
 Usage (from the project root):
     .venv/bin/python code/make_actrn_tables.py
@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RES = ROOT / "data" / "processed" / "actrn_v4"
 EXT = ROOT / "data" / "processed" / "actrn_v4_ext"
 AUTOFORMER = ROOT / "data" / "processed" / "actrn_v4_ext_autoformer"
+CASE = ROOT / "data" / "processed" / "actrn_v4_case"
 OUT = ROOT / "paper" / "fuel_2026" / "tables"
 sys.path.insert(0, str(ROOT / "code"))
 
@@ -114,7 +115,7 @@ def load():
         "runs": both("benchmark_runs.csv", "sequence_runs.csv"),
         "sensitivity": pd.read_csv(EXT / "sensitivity_hyperparameters.csv"),
         "field": pd.concat([field, seq_field], ignore_index=True),
-        "case": json.loads((RES / "field_case_summary.json").read_text()),
+        "case": json.loads((CASE / "field_case_summary.json").read_text()),
     }
 
 
@@ -410,8 +411,7 @@ def supplementary(R) -> None:
     (OUT / "supp_cost.tex").write_text(_longtable(
         "lrr", "Time to fit the nine candidates of a model family in one repeat and predict the "
         "validation and test trajectories and candidate libraries (median over 20 repeats, minutes "
-        "on one CPU thread). Jobs ran in parallel on a shared server, so the times indicate orders "
-        "of magnitude only.", "tab:s-cost",
+        "on one CPU thread of a shared server).", "tab:s-cost",
         "Model & Base population & Channelised population", body))
 
     runs = R["runs"]
@@ -425,7 +425,7 @@ def supplementary(R) -> None:
                 for rep, row in piv.iterrows()]
         out.append("{\\scriptsize\\setlength{\\tabcolsep}{2pt}\n" + _longtable(
             "r" + "r" * len(FAMILIES),
-            f"Relative regret (\\%) per registered repeat index $r$, {title}.",
+            f"Relative regret (\\%) per repeat index $r$, {title}.",
             f"tab:s-repeats-{st}", "$r$ & " + " & ".join(SHORT[f] for f in FAMILIES), body) + "}")
     (OUT / "supp_repeats.tex").write_text("\n".join(out))
 
@@ -462,7 +462,7 @@ def supplementary(R) -> None:
         body.append("\\midrule")
     (OUT / "supp_selection.tex").write_text(_longtable(
         "llrrrr", "Mean regret and NMAE when every family selects its candidate by validation "
-        "regret (registered rule) or by validation NMAE.", "tab:s-selection",
+        "regret (default rule) or by validation NMAE.", "tab:s-selection",
         "& & \\multicolumn{2}{c}{Regret (\\%)} & \\multicolumn{2}{c}{NMAE (\\%)} \\\\ "
         "Setting & Model & regret rule & NMAE rule & regret rule & NMAE rule", body))
 
@@ -530,14 +530,17 @@ def supplementary_field_blocks() -> None:
                     f"{d(va[-1])} (30) & {d(start)} -- {d(end - 1)} (60) & {last_target} \\\\")
     rows += ["\\bottomrule", "\\end{tabular}"]
     (OUT / "supp_field_blocks.tex").write_text("\n".join(rows) + "\n")
-    bt = pd.read_csv(RES / "field_case_backtest.csv")
-    dec = pd.read_csv(RES / "field_case_decision.csv")
-    rows = ["\\begin{tabular}{rrrrrr}", "\\toprule",
-            "Week & Selected F-4 & Selected F-5 & Predicted (selected) & Predicted (implemented) "
-            "& Observed (implemented) \\\\", "\\midrule"]
+    bt = pd.read_csv(CASE / "field_case_backtest.csv")
+    dec = pd.read_csv(CASE / "field_case_decision.csv")
+    rows = ["\\begin{tabular}{rrrrrrrr}", "\\toprule",
+            "& \\multicolumn{3}{c}{Selected schedule} & \\multicolumn{4}{c}{Implemented schedule} \\\\",
+            "\\cmidrule(lr){2-4}\\cmidrule(lr){5-8}",
+            "Week & F-4 & F-5 & Predicted oil & F-4 & F-5 & Predicted oil & Observed oil \\\\",
+            "\\midrule"]
     for (_, b), (_, s) in zip(bt.iterrows(), dec.iterrows()):
         rows.append(f"{int(b.step)} & {s.injector_1_m3:,.0f} & {s.injector_2_m3:,.0f} & "
-                    f"{s.predicted_field_oil_m3:,.0f} & {b.predicted_under_implemented_m3:,.0f} & "
+                    f"{s.predicted_field_oil_m3:,.0f} & {b.implemented_injector_1_m3:,.0f} & "
+                    f"{b.implemented_injector_2_m3:,.0f} & {b.predicted_under_implemented_m3:,.0f} & "
                     f"{b.observed_field_oil_m3:,.0f} \\\\")
     rows += ["\\bottomrule", "\\end{tabular}"]
     (OUT / "supp_field_case.tex").write_text("\n".join(rows) + "\n")

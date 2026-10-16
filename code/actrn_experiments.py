@@ -438,8 +438,19 @@ def field_persistence(fold: int, test_start: int, test_end: int) -> dict:
     return row
 
 
-def field_decision_example(out_dir: Path, grid_limit: int) -> dict:
-    """Look-ahead-free decision example at the latest active window."""
+def _schedule_shares(plan: np.ndarray) -> dict:
+    """Share of injector 1 (F-4) and of the first half of the horizon in a schedule's total."""
+    half = plan.shape[0] // 2
+    return {"injector_1_share": float(plan[:, 0].sum() / plan.sum()),
+            "first_half_share": float(plan[:half].sum() / plan.sum())}
+
+
+def field_decision_example(out_dir: Path, grid_limit: int, budget_rule: str = "recent_median") -> dict:
+    """Look-ahead-free decision example at the latest active window.
+
+    ``budget_rule`` sets the common total injection of the candidate library: the median total of
+    the latest 52 historical blocks (v4) or the total of the implemented schedule (ADR-0007).
+    """
     hist, act, out, dates, level, scale, target = field_data()
     c = int(np.flatnonzero(level >= CASE_LEVEL_M3)[-1])
     blocks = field_blocks(c)
@@ -451,7 +462,12 @@ def field_decision_example(out_dir: Path, grid_limit: int) -> dict:
     val_nmae, chosen, model = min(scores, key=lambda x: (x[0], x[1]))
     complete = np.arange(0, c - act.shape[1] + 1)        # action blocks ending before date c
     totals = act[complete].sum(axis=(1, 2))
-    budget = float(np.median(totals[-52:]))
+    if budget_rule == "recent_median":
+        budget = float(np.median(totals[-52:]))
+    elif budget_rule == "implemented":
+        budget = float(act[c].sum())
+    else:
+        raise ValueError(f"unknown budget rule: {budget_rule}")
     keep = complete[np.abs(totals - budget) / budget <= 0.05]
     plans = act[keep] * (budget / act[keep].sum(axis=(1, 2)))[:, None, None]
     idx = np.full(len(plans), c)
@@ -477,6 +493,12 @@ def field_decision_example(out_dir: Path, grid_limit: int) -> dict:
         "observed_field_oil_m3": out[c], "predicted_under_implemented_m3": realized_pred,
         "persistence_m3": np.full(act.shape[1], level[c]),
     }).to_csv(out_dir / "field_case_backtest.csv", index=False)
+    extra = {}
+    if budget_rule != "recent_median":
+        extra = {"budget_rule": budget_rule,
+                 "candidates_above_implemented": int((pred.sum(axis=1) > realized_pred.sum()).sum()),
+                 "selected_shares": _schedule_shares(plans[best]),
+                 "implemented_shares": _schedule_shares(act[c])}
     return {
         "case_decision_date": str(dates[c].date()), "case_index": c,
         "case_level_m3": float(level[c]), "latest_candidate_block": str(dates[complete[-1]].date()),
@@ -492,6 +514,7 @@ def field_decision_example(out_dir: Path, grid_limit: int) -> dict:
         "clip_bounds_m3": list(bounds),
         "case_candidate": _params_label(GRIDS["field"]["ACTRN"], chosen),
         "case_validation_nmae_pct": val_nmae,
+        **extra,
     }
 
 

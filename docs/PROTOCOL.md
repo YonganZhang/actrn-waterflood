@@ -100,3 +100,15 @@ the field protocol are unchanged. Only Autoformer is rerun, once
 behaviour of reformer-pytorch, which draws new hash rotations at every forward pass.
 Mean-squared-error reductions are reported as the mean over repeats (or field origins) of RMSE
 squared.
+
+## Amendment: field decision example at the implemented budget (fixed 16 October 2026)
+
+The v4 decision example rescaled its candidate library to the median total of the latest 52
+historical blocks (603,918 m3), whereas the implemented schedule injected 528,094 m3, so the
+selected and implemented schedules were not compared at the same budget. The amended example keeps
+the decision date (24 May 2015), training blocks, model seed 747 and the validation-NMAE choice
+among the nine candidates, and rescales the historical blocks that end before the decision date
+and lie within 5% of the implemented total to that total. Before the run, the same script with the
+v4 budget rule reproduced the v4 example byte for byte. Run once
+(`code/actrn_field_case.py --budget implemented`) into `data/processed/actrn_v4_case/`; the v4
+example in `data/processed/actrn_v4/` is kept as provenance.

@@ -60,6 +60,7 @@ ORDER = RAW + SEQ + ENG + ["ACTRN"]
 BASELINES = RAW + SEQ + ENG
 N_REPEATS = 20
 EXTENSION = PROC / "actrn_v4_ext"
+CASE = PROC / "actrn_v4_case"                  # field decision example (ADR-0007)
 LABEL = {"Ridge": "Ridge", "Random forest": "RF", "HGB": "HGB", "MLP": "MLP",
          "RNN": "RNN", "LSTM": "LSTM", "Transformer": "Transf.", "Autoformer": "Autof.",
          "Reformer": "Reform.", "ACTRN": "ACTRN", "Persistence": "Persistence"}
@@ -120,7 +121,8 @@ def read_results(results: Path) -> dict:
                 "field_case_candidates.csv": None}
     frames = {}
     for name, rows in expected.items():
-        frame = pd.read_csv(results / name)
+        # the field decision example comes from its equal-budget run (ADR-0007)
+        frame = pd.read_csv((CASE if name.startswith("field_case") else results) / name)
         if rows is not None and len(frame) != rows:
             raise ValueError(f"{name}: expected {rows} rows, got {len(frame)}")
         frames[name.removesuffix(".csv")] = frame
@@ -152,7 +154,7 @@ def read_results(results: Path) -> dict:
     frames["benchmark_decisions"] = dec[dec["response"] == "exp"]
     summary = frames["benchmark_summary"]
     frames["benchmark_summary"] = summary[summary["response"] == "exp"]
-    frames["case"] = json.loads((results / "field_case_summary.json").read_text())
+    frames["case"] = json.loads((CASE / "field_case_summary.json").read_text())
     return frames
 
 
@@ -503,13 +505,22 @@ def figure_field(metrics, decision, backtest, case):
     style_axis(b, "x")
     panel(b, "b", x=-0.3)
     steps = decision["step"].to_numpy()
-    i1, i2 = decision["injector_1_m3"].to_numpy() / 1e3, decision["injector_2_m3"].to_numpy() / 1e3
-    c.bar(steps, i1, color=BLUE, width=0.7, label="Injector F-4")
-    c.bar(steps, i2, bottom=i1, color=SKY, width=0.7, label="Injector F-5")
+    schedules = [("selected", decision["injector_1_m3"], decision["injector_2_m3"], -0.2, None),
+                 ("implemented", backtest["implemented_injector_1_m3"],
+                  backtest["implemented_injector_2_m3"], 0.2, "////")]
+    for name, f4, f5, shift, hatch in schedules:
+        f4, f5 = f4.to_numpy() / 1e3, f5.to_numpy() / 1e3
+        fill = {"edgecolor": "white", "linewidth": 0.6} if hatch else {}
+        c.bar(steps + shift, f4, color=BLUE, width=0.38, hatch=hatch, label=f"F-4, {name}", **fill)
+        c.bar(steps + shift, f5, bottom=f4, color=SKY, width=0.38, hatch=hatch,
+              label=f"F-5, {name}", **fill)
     c.set_xlabel("Planning step (week)")
-    c.set_ylabel(r"Selected injection ($10^3$ m$^3$)")
+    c.set_ylabel(r"Injection ($10^3$ m$^3$ week$^{-1}$)")
     c.set_xticks(steps)
-    c.legend(frameon=False, loc="upper left", fontsize=8)
+    top_c = max((decision["injector_1_m3"] + decision["injector_2_m3"]).max(),
+                (backtest["implemented_injector_1_m3"] + backtest["implemented_injector_2_m3"]).max())
+    c.set_ylim(0, 1.45 * top_c / 1e3)                 # head-room for the legend
+    c.legend(frameon=False, loc="upper left", fontsize=7.5, ncol=2)
     style_axis(c)
     panel(c, "c")
     d.plot(steps, decision["predicted_field_oil_m3"] / 1e3, color=CORAL, marker="D", ms=4,
