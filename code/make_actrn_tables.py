@@ -160,44 +160,45 @@ def main_tables(R) -> dict:
         return ms(s.loc[key, f"{col}_mean"], s.loc[key, f"{col}_std"], d)
 
     refs = {st: dependence_reference(R["dependence"], *SETTINGS[st]) for st in ("base", "channel")}
-    gains = {}
-    for setting, title in (("base", "base"), ("channel", "channelised")):
-        rows = []
-        for label, group in (("Conventional models", RAW), ("Deep sequence models", SEQ),
-                             ("Conventional models with ACTRN features", ENG)):
-            rows.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{{label}}}}} \\\\")
-            rows += [" & ".join([NAME[f]] + [cell(setting, f, c, d) for c, d, _ in METRICS])
-                     for f in group]
-            rows.append("\\midrule")
-        rows.append(" & ".join(["\\textbf{ACTRN}"] + [cell(setting, "ACTRN", c, d)
-                                                       for c, d, _ in METRICS]))
+    gains = {st: {"vs_conventional_and_deep": improvement(s, st, RAW + SEQ),
+                  "vs_with_features": improvement(s, st, ENG),
+                  "vs_all": improvement(s, st, BASELINES)} for st in ("base", "channel")}
+    cols = [("nmae_pct", 2, "low"), ("r2", 3, "high"), ("decision_regret_pct", 2, "low"),
+            ("gain_capture_pct", 1, "high")]
+    rows = []
+    for label, group in (("Conventional models", RAW), ("Deep sequence models", SEQ),
+                         ("Conventional models with ACTRN features", ENG)):
+        rows.append(f"\\multicolumn{{9}}{{l}}{{\\emph{{{label}}}}} \\\\")
+        rows += [" & ".join([NAME[f]] + [cell(st, f, c, d) for st in ("base", "channel")
+                                         for c, d, _ in cols]) for f in group]
         rows.append("\\midrule")
-        gains[setting] = {"vs_conventional_and_deep": improvement(s, setting, RAW + SEQ),
-                          "vs_with_features": improvement(s, setting, ENG),
-                          "vs_all": improvement(s, setting, BASELINES)}
-        for key, label in (("vs_conventional_and_deep", "Gain over best conventional/deep model"),
-                           ("vs_with_features", "Gain over best model with ACTRN features")):
-            g = gains[setting][key]
-            rows.append(" & ".join([f"\\emph{{{label}}}"] + [
-                (f"${g[c]['change']:.1f}\\%$" if u == "low" else
-                 f"${g[c]['change']:+.3f}$" if c == "r2" else
-                 f"${g[c]['change']:+.1f}$") for c, _, u in METRICS]))
-        ref = refs[setting]
-        rows.append("\\midrule")
-        rows.append(" & ".join(["Random candidate", "--", "--", "--",
-                                ms(*ref["random_regret"], 2), "$0$", "$1.3$"]))
-        rows.append(" & ".join(["State-blind reference ranking", "--", "--", "--",
-                                ms(*ref["blind_regret"], 2), ms(*ref["blind_capture"], 1), "--"]))
-        (OUT / f"tab_comparison_{setting}.tex").write_text(table(
-            rows, ["Model", "NMAE (\\%)", "NRMSE (\\%)", "$R^2$", "Regret (\\%)",
-                   "Gain capture (\\%)", "Exact optimum (\\%)"],
-            f"Comparative experiment on the {title} population: trajectory prediction and schedule "
-            "selection over 640 decision contexts with 80 equal-budget candidates each (mean "
-            "$\\pm$ standard deviation over 20 repeats). Gains are reductions in percent for NMAE, "
-            "NRMSE and regret, the difference in $R^2$, and differences in percentage points for "
-            "gain capture and exact-optimum selection. The state-blind reference ranks the candidates of a state by "
-            "their mean true value over all other test states of the repeat.",
-            f"tab:comparison-{setting}", "lrrrrrr", wide=True))
+    rows.append(" & ".join(["\\textbf{ACTRN}"] + [cell(st, "ACTRN", c, d)
+                                                   for st in ("base", "channel") for c, d, _ in cols]))
+    rows.append("\\midrule")
+    for key, label in (("vs_conventional_and_deep", "Gain over best conventional/deep model"),
+                       ("vs_with_features", "Gain over best model with ACTRN features")):
+        rows.append(" & ".join([f"\\emph{{{label}}}"] + [
+            (f"${gains[st][key][c]['change']:.1f}\\%$" if u == "low" else
+             f"${gains[st][key][c]['change']:+.3f}$" if c == "r2" else
+             f"${gains[st][key][c]['change']:+.1f}$")
+            for st in ("base", "channel") for c, _, u in cols]))
+    rows.append("\\midrule")
+    rows.append(" & ".join(["Random candidate"] + [x for st in ("base", "channel") for x in
+                                                  ("--", "--", ms(*refs[st]["random_regret"], 2), "$0$")]))
+    rows.append(" & ".join(["State-blind reference ranking"] + [
+        x for st in ("base", "channel") for x in
+        ("--", "--", ms(*refs[st]["blind_regret"], 2), ms(*refs[st]["blind_capture"], 1))]))
+    (OUT / "tab_comparison.tex").write_text(table(
+        rows, ["Model"] + ["NMAE (\\%)", "$R^2$", "Regret (\\%)", "Gain capture (\\%)"] * 2,
+        "Prediction and selection performance in the comparative experiment (mean $\\pm$ SD, "
+        "20 repeats).", "tab:comparison", "lrrrrrrrr", wide=True,
+        pre=["& \\multicolumn{4}{c}{Base population} & \\multicolumn{4}{c}{Channelised population} \\\\",
+             "\\cmidrule(lr){2-5}\\cmidrule(lr){6-9}"],
+        notes="Gain: reduction (\\%) in NMAE and regret; difference in $R^2$; percentage points in "
+              "gain capture. State-blind reference: candidates ranked by their mean true value over "
+              "the other test states."))
+    for stale in ("tab_comparison_base.tex", "tab_comparison_channel.tex"):
+        (OUT / stale).unlink(missing_ok=True)
 
     abl_cols = [("nmae_pct", 2), ("decision_regret_pct", 2), ("gain_capture_pct", 1)]
     rows = [" & ".join([NAME[f]] + [cell(st, f, c, d) for st in ("base", "channel")
@@ -206,9 +207,9 @@ def main_tables(R) -> dict:
     (OUT / "tab_ablation.tex").write_text(table(
         rows, ["Model", "NMAE (\\%)", "Regret (\\%)", "Gain capture (\\%)",
                "NMAE (\\%)", "Regret (\\%)", "Gain capture (\\%)"],
-        "Ablation experiment (mean $\\pm$ standard deviation over 20 repeats). Each ablation "
-        "changes one component and reuses the candidate selected for the full model in the same "
-        "repeat.", "tab:ablation", "lrrrrrr", wide=True,
+        "Ablation results (mean $\\pm$ SD, 20 repeats).", "tab:ablation", "lrrrrrr", wide=True,
+        notes="Each variant changes one component and reuses the candidate selected for the full "
+              "model.",
         pre=["& \\multicolumn{3}{c}{Base population} & \\multicolumn{3}{c}{Channelised population} \\\\",
              "\\cmidrule(lr){2-4}\\cmidrule(lr){5-7}"]))
 
@@ -224,12 +225,17 @@ def main_tables(R) -> dict:
     dates = field.drop_duplicates("fold").sort_values("fold")
     note = "; ".join(f"origin {int(r.fold) + 1}: {r.test_start} to {r.test_end}"
                      for r in dates.itertuples())
-    (OUT / "tab_field.tex").write_text(table(
-        rows[:-1], ["Model", "O1", "O2", "O3", "O4", "Mean NMAE", "Mean NRMSE", "Mean $R^2$"],
-        "Field case study: leakage-free rolling-origin forecasting on the Volve record, NMAE (\\%) "
-        "by origin and means over the four origins.", "tab:field", "lrrrrrrr", wide=True,
-        notes=f"Test blocks of 60 weekly decision windows ({note})."))
-    for stale in ("tab_prediction.tex", "tab_decision.tex"):
+    (OUT / "supp_field_nmae.tex").write_text("\n".join(
+        ["\\begin{table}[h]", "\\centering",
+         "\\caption{Field NMAE (\\%) by rolling origin (O1--O4) and means over the four origins.}",
+         "\\label{tab:s-field}", "\\begin{adjustbox}{max width=\\linewidth}",
+         "\\begin{tabular}{lrrrrrrr}", "\\toprule",
+         "Model & O1 & O2 & O3 & O4 & Mean NMAE & Mean NRMSE & Mean $R^2$ \\\\", "\\midrule"]
+        + [r if r == "\\midrule" else r + " \\\\" for r in rows[:-1]]
+        + ["\\bottomrule", "\\end{tabular}", "\\end{adjustbox}",
+           f"\\par\\smallskip{{\\footnotesize Test blocks of 60 weekly decision windows ({note}).}}",
+           "\\end{table}"]) + "\n")
+    for stale in ("tab_prediction.tex", "tab_decision.tex", "tab_field.tex"):
         (OUT / stale).unlink(missing_ok=True)
     return {"refs": refs, "field_by_fold": fp, "field_mean": fsum, "gains": gains}
 
@@ -337,24 +343,6 @@ def within_context_share() -> dict:
 
 
 # ----------------------------------------------------------------- supplementary tables
-def _fmt_params(p) -> str:
-    if p == "average of all configurations":
-        return "average of the eight configurations"
-    p = json.loads(p)
-    alias = {"latent_dim": "latent", "learning_rate": "lr", "l2": "$\\ell_2$",
-             "alpha": "$\\alpha$", "max_depth": "depth", "min_samples_leaf": "min leaf",
-             "max_leaf_nodes": "leaf nodes", "hidden_layer_sizes": "hidden",
-             "learning_rate_init": "lr", "d_model": "width", "dropout": "dropout"}
-    out = []
-    for k, v in p.items():
-        if isinstance(v, (list, tuple)):
-            v = "(" + ", ".join(str(x) for x in v) + ")"
-        elif v is None:
-            v = "none"
-        out.append(f"{alias.get(k, k)} {v}")
-    return "; ".join(out)
-
-
 def _longtable(spec, caption, label, header, body):
     rows = [f"\\begin{{longtable}}{{{spec}}}", f"\\caption{{{caption}}}\\label{{{label}}}\\\\",
             "\\toprule", header + " \\\\", "\\midrule", "\\endfirsthead",
@@ -409,72 +397,26 @@ def supplementary(R) -> None:
     cost = fit_minutes(R["runs"])
     body = [f"{NAME[f]} & {cost['base'][f]:.1f} & {cost['channel'][f]:.1f} \\\\" for f in FAMILIES]
     (OUT / "supp_cost.tex").write_text(_longtable(
-        "lrr", "Time to fit the nine candidates of a model family in one repeat and predict the "
-        "validation and test trajectories and candidate libraries (median over 20 repeats, minutes "
-        "on one CPU thread of a shared server).", "tab:s-cost",
+        "lrr", "Time to fit the nine candidates of each model family and predict the validation "
+        "and test data (median minutes per repeat, one CPU thread).", "tab:s-cost",
         "Model & Base population & Channelised population", body))
-
-    runs = R["runs"]
-    out = []
-    for st, title in (("base", "base population"), ("channel", "channelised population"),
-                      ("hill", "alternative saturation response")):
-        p, r = SETTINGS[st]
-        sub = runs[(runs.population == p) & (runs.response == r) & runs.family.isin(FAMILIES)]
-        piv = sub.pivot(index="repeat", columns="family", values="decision_regret_pct")[FAMILIES]
-        body = [f"{int(rep)} & " + " & ".join(f"{v:.2f}" for v in row) + " \\\\"
-                for rep, row in piv.iterrows()]
-        out.append("{\\scriptsize\\setlength{\\tabcolsep}{2pt}\n" + _longtable(
-            "r" + "r" * len(FAMILIES),
-            f"Relative regret (\\%) per repeat index $r$, {title}.",
-            f"tab:s-repeats-{st}", "$r$ & " + " & ".join(SHORT[f] for f in FAMILIES), body) + "}")
-    (OUT / "supp_repeats.tex").write_text("\n".join(out))
-
-    sens = sensitivity_summary(R["sensitivity"])
-    labels = {"latent_dim": "latent dimension $d$", "l2": "$\\ell_2$ penalty $\\lambda_2$",
-              "ensemble": "ensemble size", "learning_rate": "learning rate"}
-    body = []
-    for axis, label in labels.items():
-        for i, v in enumerate(sens[axis]["base"]):
-            b, c = sens[axis]["base"][v], sens[axis]["channelised"][v]
-            mark = "*" if np.isclose(float(v), SENS_DEFAULT[axis]) else ""
-            value = (f"$10^{{{round(np.log10(float(v)))}}}$" if axis == "l2" else f"{float(v):g}")
-            body.append(f"{label if i == 0 else ''} & {value}{mark} & "
-                        f"{b['decision_regret_pct']:.3f} & {b['nmae_pct']:.2f} & "
-                        f"{c['decision_regret_pct']:.3f} & {c['nmae_pct']:.2f} \\\\")
-        body.append("\\midrule")
-    (OUT / "supp_sensitivity.tex").write_text(_longtable(
-        "llrrrr", "Hyperparameter sensitivity of ACTRN: one hyperparameter is changed at a time "
-        "around the default configuration (marked *); mean test regret (\\%) and NMAE (\\%) "
-        "over 20 repeats.", "tab:s-sensitivity",
-        "Hyperparameter & Value & Base regret & Base NMAE & Channelised regret & "
-        "Channelised NMAE", body))
 
     s, n = R["summary"], R["nmae_sel"]
     body = []
-    for st in ("base", "channel", "hill"):
+    for st in ("base", "channel"):
         for f in FAMILIES:
             key = SETTINGS[st] + (f,)
-            label = {"base": "base", "channel": "channelised", "hill": "base, Hill"}[st]
+            label = {"base": "base", "channel": "channelised"}[st]
             body.append(f"{label if f == FAMILIES[0] else ''} & {SHORT[f]} & "
                         f"{s.loc[key, 'decision_regret_pct_mean']:.2f} & "
                         f"{n.loc[key, 'decision_regret_pct_mean']:.2f} & "
                         f"{s.loc[key, 'nmae_pct_mean']:.2f} & {n.loc[key, 'nmae_pct_mean']:.2f} \\\\")
         body.append("\\midrule")
     (OUT / "supp_selection.tex").write_text(_longtable(
-        "llrrrr", "Mean regret and NMAE when every family selects its candidate by validation "
-        "regret (default rule) or by validation NMAE.", "tab:s-selection",
+        "llrrrr", "Mean regret and NMAE under the two tuning rules (validation regret, the default, "
+        "or validation NMAE).", "tab:s-selection",
         "& & \\multicolumn{2}{c}{Regret (\\%)} & \\multicolumn{2}{c}{NMAE (\\%)} \\\\ "
         "Setting & Model & regret rule & NMAE rule & regret rule & NMAE rule", body))
-
-    hill = [" & ".join([NAME[f]] + [ms(s.loc[SETTINGS["hill"] + (f,), f"{c}_mean"],
-                                       s.loc[SETTINGS["hill"] + (f,), f"{c}_std"], d)
-                                    for c, d in (("nmae_pct", 2), ("decision_regret_pct", 2),
-                                                 ("gain_capture_pct", 1))]) + " \\\\"
-            for f in FAMILIES]
-    (OUT / "supp_hill.tex").write_text(_longtable(
-        "lrrr", "Base population with the alternative saturation response $a/(a+0.55)$ "
-        "(mean $\\pm$ standard deviation over 20 repeats).", "tab:s-hill",
-        "Model & NMAE (\\%) & Regret (\\%) & Gain capture (\\%)", hill))
 
     curve = R["curve"]
     agg = curve.groupby(["population", "family", "train_subset"]).agg(
@@ -493,23 +435,12 @@ def supplementary(R) -> None:
                             f"{int(r.rows)} & {ms(r.regret, r.sd, 2)} & {r.nmae:.2f} \\\\")
         body.append("\\midrule")
     (OUT / "supp_learning.tex").write_text(_longtable(
-        "llp{0.27\\linewidth}rrr", "Decision regret with reduced training data (mean $\\pm$ "
-        "standard deviation over 20 repeats). Subsets are nested in the full training set; "
-        "validation and test data are unchanged.", "tab:s-learning",
+        "llp{0.27\\linewidth}rrr", "Regret and NMAE with reduced training data (mean $\\pm$ SD, "
+        "20 repeats).", "tab:s-learning",
         "Population & Model & Training data & Examples & Regret (\\%) & NMAE (\\%)", body))
 
-    field = R["field"]
-    body = []
-    for f in ["Persistence"] + FAMILIES:
-        for r in field[field.family == f].sort_values("fold").itertuples():
-            cfg = _fmt_params(r.params) if r.params != "{}" else "--"
-            body.append(f"{NAME[f]} & {int(r.fold) + 1} & {r.nmae_pct:.1f} & {r.nrmse_pct:.1f} & "
-                        f"${r.r2:.2f}$ & {cfg} \\\\")
-        body.append("\\midrule")
-    (OUT / "supp_field.tex").write_text(_longtable(
-        "p{0.24\\linewidth}rrrrp{0.29\\linewidth}",
-        "Field candidates selected per origin and test metrics.", "tab:s-field",
-        "Model & Origin & NMAE (\\%) & NRMSE (\\%) & $R^2$ & Selected candidate", body))
+    for stale in ("supp_repeats.tex", "supp_sensitivity.tex", "supp_hill.tex", "supp_field.tex"):
+        (OUT / stale).unlink(missing_ok=True)
 
 
 def supplementary_field_blocks() -> None:
@@ -530,20 +461,7 @@ def supplementary_field_blocks() -> None:
                     f"{d(va[-1])} (30) & {d(start)} -- {d(end - 1)} (60) & {last_target} \\\\")
     rows += ["\\bottomrule", "\\end{tabular}"]
     (OUT / "supp_field_blocks.tex").write_text("\n".join(rows) + "\n")
-    bt = pd.read_csv(CASE / "field_case_backtest.csv")
-    dec = pd.read_csv(CASE / "field_case_decision.csv")
-    rows = ["\\begin{tabular}{rrrrrrrr}", "\\toprule",
-            "& \\multicolumn{3}{c}{Selected schedule} & \\multicolumn{4}{c}{Implemented schedule} \\\\",
-            "\\cmidrule(lr){2-4}\\cmidrule(lr){5-8}",
-            "Week & F-4 & F-5 & Predicted oil & F-4 & F-5 & Predicted oil & Observed oil \\\\",
-            "\\midrule"]
-    for (_, b), (_, s) in zip(bt.iterrows(), dec.iterrows()):
-        rows.append(f"{int(b.step)} & {s.injector_1_m3:,.0f} & {s.injector_2_m3:,.0f} & "
-                    f"{s.predicted_field_oil_m3:,.0f} & {b.implemented_injector_1_m3:,.0f} & "
-                    f"{b.implemented_injector_2_m3:,.0f} & {b.predicted_under_implemented_m3:,.0f} & "
-                    f"{b.observed_field_oil_m3:,.0f} \\\\")
-    rows += ["\\bottomrule", "\\end{tabular}"]
-    (OUT / "supp_field_case.tex").write_text("\n".join(rows) + "\n")
+    (OUT / "supp_field_case.tex").unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

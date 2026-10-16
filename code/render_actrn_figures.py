@@ -1,9 +1,10 @@
-"""Render the ACTRN manuscript data figures (Figures 2-8) from registered v4 outputs.
+"""Render the ACTRN manuscript data figures (Figures 2-7 and Supplementary Fig. S1).
 
-Reads ``data/processed/actrn_v4`` (written by ``actrn_experiments.py``) plus the Volve
-context tables, and writes PDF/PNG pairs to ``paper/fuel_2026/figures``.  Figure 3 is
-the field-state figure from ``render_p17_full_figure_suite.py``; Figure 1 is the editable
-PowerPoint schematic.  No fallback or placeholder data are permitted.
+Reads ``data/processed/actrn_v4`` (written by ``actrn_experiments.py``), the extension,
+corrected-Autoformer and field-case results, the Volve context tables and the Natural Earth
+coastline subset, and writes PDF/PNG pairs to ``paper/fuel_2026/figures``.  Supplementary
+Fig. S1 is the field-state figure from ``render_p17_full_figure_suite.py``; Figure 1 is the
+editable PowerPoint schematic.  No fallback or placeholder data are permitted.
 
 Usage (from the project root):
     .venv/bin/python code/render_actrn_figures.py [--results data/processed/actrn_v4]
@@ -23,6 +24,7 @@ from matplotlib import colors as mcolors
 from matplotlib import font_manager
 from matplotlib import ticker as mticker
 from matplotlib.lines import Line2D
+from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 import numpy as np
 import pandas as pd
 
@@ -159,7 +161,11 @@ def read_results(results: Path) -> dict:
 
 
 # ----------------------------------------------------------------- Figure 2
-def response_surface_data():
+CANDIDATE_COLORS = ["#D55E00", "#009E73", "#0072B2"]
+CANDIDATE_PLANS = ((0.30, -0.8), (0.50, 0.0), (0.70, 0.8))   # (allocation, front-loading)
+
+
+def response_surface_data(n=60):
     """Fixed-budget response surface for one state, using the benchmark's action bounds."""
     reservoir = make_reservoir(np.random.default_rng(20260716))
     pressure = np.array([0.38, 0.57, 0.44])
@@ -171,58 +177,86 @@ def response_surface_data():
         w = np.exp(-timing * t_grid)
         return allocate_budget(np.column_stack([split * w, (1.0 - split) * w]), budget)
 
-    allocation = np.linspace(0.15, 0.85, 36)
-    timing = np.linspace(-1.2, 1.2, 36)
+    allocation = np.linspace(0.15, 0.85, n)
+    timing = np.linspace(-1.2, 1.2, n)
     surface = np.array([[rollout(reservoir, pressure, water, plan(s, t), age=31).sum()
                          for s in allocation] for t in timing])
     examples = [(p := plan(s, t), rollout(reservoir, pressure, water, p, age=31))
-                for s, t in ((0.30, -0.8), (0.50, 0.0), (0.70, 0.8))]
+                for s, t in CANDIDATE_PLANS]
     return allocation, timing, surface, examples
+
+
+def _surface_panel(fig, ax, allocation, timing, surface, cbar="right"):
+    levels = np.linspace(surface.min(), surface.max(), 15)
+    cs = ax.contourf(100 * allocation, timing, surface, levels=levels, cmap="YlGnBu_r",
+                     extend="both")
+    ax.contour(100 * allocation, timing, surface, levels=levels[::2], colors="white",
+               linewidths=0.35, alpha=0.65)
+    for i, ((split, front), color) in enumerate(zip(CANDIDATE_PLANS, CANDIDATE_COLORS), 1):
+        ax.scatter(100 * split, front, s=34, marker="o", color=color, edgecolor="white",
+                   linewidth=0.9, zorder=4)
+        ax.annotate(f"C{i}", (100 * split, front), xytext=(5, 4), textcoords="offset points",
+                    color=DARK, fontsize=8, fontweight="bold")
+    if cbar == "right":
+        cb = fig.colorbar(cs, ax=ax, fraction=0.06, pad=0.03)
+    else:
+        cb = fig.colorbar(cs, ax=ax, orientation="horizontal", fraction=0.09, pad=0.16)
+    cb.set_label("Cumulative oil (simulator units)")
+    cb.ax.tick_params(labelsize=7.5)
+    cb.formatter = mticker.FormatStrFormatter("%.1f")
+    cb.update_ticks()
+    ax.set_xlabel("Allocation to injector 1 (%)")
+    ax.set_ylabel("Front-loading index")
+
+
+def _schedule_panel(ax, examples):
+    steps = np.arange(1, 9)
+    for (p, _), c in zip(examples, CANDIDATE_COLORS):
+        ax.plot(steps, p[:, 0], color=c, marker="o", ms=3.4)
+        ax.plot(steps, p[:, 1], color=c, ls="--", marker="s", ms=3.0)
+    ax.set_ylim(0, 2.45)
+    ax.set_xlabel("Planning step")
+    ax.set_ylabel("Injection (simulator units)")
+    ax.set_xticks(steps)
+    ax.legend([Line2D([0], [0], color=DARK, marker="o", ms=3.4),
+               Line2D([0], [0], color=DARK, ls="--", marker="s", ms=3.0)],
+              ["Injector 1", "Injector 2"], frameon=False, loc="upper left",
+              bbox_to_anchor=(0.02, 1.0), ncol=2, handlelength=2.0, columnspacing=1.0)
+    style_axis(ax)
+
+
+def _response_panel(ax, examples):
+    steps = np.arange(1, 9)
+    prod = np.array([p for _, p in examples])
+    ax.fill_between(steps, prod.min(axis=0), prod.max(axis=0), color=PALE, alpha=0.35, lw=0)
+    for i, (row, c) in enumerate(zip(prod, CANDIDATE_COLORS), 1):
+        ax.plot(steps, row, color=c, marker="o", ms=3.4, label=f"Candidate C{i}")
+    ax.set_xlabel("Planning step")
+    ax.set_ylabel("Oil production (simulator units)")
+    ax.set_xticks(steps)
+    ax.legend(frameon=False, loc="upper right")
+    style_axis(ax)
 
 
 def figure_benchmark_design():
     allocation, timing, surface, examples = response_surface_data()
-    fig, (ax_a, ax_b, ax_c) = plt.subplots(3, 1, figsize=(3.4, 8.2), constrained_layout=True)
-    levels = np.linspace(surface.min(), surface.max(), 15)
-    cs = ax_a.contourf(100 * allocation, timing, surface, levels=levels, cmap="YlGnBu_r")
-    ax_a.contour(100 * allocation, timing, surface, levels=levels[::2], colors="white",
-                 linewidths=0.35, alpha=0.65)
-    cb = fig.colorbar(cs, ax=ax_a, orientation="horizontal", fraction=0.09, pad=0.16)
-    cb.set_label("Cumulative oil (simulator units)")
-    cb.ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f"))
-    ax_a.set_xlabel("Allocation to injector 1 (%)")
-    ax_a.set_ylabel("Front-loading index")
-    panel(ax_a, "a")
-    steps = np.arange(1, 9)
-    colors = ["#D55E00", "#009E73", "#0072B2"]
-    for i, ((p, _), c) in enumerate(zip(examples, colors), 1):
-        ax_b.plot(steps, p[:, 0], color=c, marker="o", ms=3.5, label=f"C{i}, injector 1")
-        ax_b.plot(steps, p[:, 1], color=c, ls="--", marker="s", ms=3.2, label=f"C{i}, injector 2")
-    ax_b.set_ylim(0, 2.55)
-    ax_b.set_xlabel("Planning step")
-    ax_b.set_ylabel("Injection (simulator units)")
-    ax_b.set_xticks(steps)
-    ax_b.legend(ncol=2, frameon=False, loc="upper center", fontsize=7.5)
-    style_axis(ax_b)
-    panel(ax_b, "b")
-    for i, ((_, prod), c) in enumerate(zip(examples, colors), 1):
-        ax_c.plot(steps, prod, color=c, marker="o", ms=3.5, label=f"Candidate {i}")
-    ax_c.set_xlabel("Planning step")
-    ax_c.set_ylabel("Oil production (simulator units)")
-    ax_c.set_xticks(steps)
-    ax_c.legend(frameon=False)
-    style_axis(ax_c)
-    panel(ax_c, "c")
+    fig, (a, b, c) = plt.subplots(1, 3, figsize=(7.2, 2.6), constrained_layout=True,
+                                  gridspec_kw={"width_ratios": [1.25, 1, 1]})
+    _surface_panel(fig, a, allocation, timing, surface)
+    _schedule_panel(b, examples)
+    _response_panel(c, examples)
+    for ax, letter in zip((a, b, c), "abc"):
+        panel(ax, letter, x=-0.24)
     save(fig, "actrn_benchmark_design")
 
 
-# ----------------------------------------------------------------- Figure 4
+# ----------------------------------------------------------------- Figure 3
 def operating_region(fig, ax, letter):
     oof = pd.read_csv(PROC / "fieldwide_oof_predictions.csv", parse_dates=["date"])
     weekly = pd.read_parquet(PROC / "fieldwide_weekly.parquet")
     op = oof.merge(weekly[["inj_F5_m3"]].rename_axis("date").reset_index(), on="date",
                    how="left", validate="one_to_one")
-    cmap = mcolors.LinearSegmentedColormap.from_list("wbr", ["#FFFFFF", BLUE, CORAL])
+    cmap = mcolors.LinearSegmentedColormap.from_list("ukiyoe", context.UKIYOE[::-1])
     hb = ax.hexbin(op["A_F4_m3"] / 1e3, op["inj_F5_m3"] / 1e3,
                    C=op["field_oil_cum_h8_m3"] / 1e3, reduce_C_function=np.mean,
                    gridsize=18, mincnt=3, cmap=cmap, linewidths=0.25, edgecolors="white")
@@ -235,7 +269,7 @@ def operating_region(fig, ax, letter):
 
 
 def figure_field_state():
-    """Figure 3 from the field-state renderer, written into the manuscript figure folder."""
+    """Supplementary Fig. S1 from the field-state renderer, written into the figure folder."""
     import shutil
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
@@ -249,69 +283,201 @@ def figure_field_state():
     plt.rcParams.update(STYLE)
 
 
-def figure_field_context():
+def _north_sea_locator(ax, lat0, lon0):
+    """Regional inset: Natural Earth 1:50m coastlines with the Volve field location."""
+    countries = json.loads((PROC / "naturalearth_north_sea_countries.geojson").read_text())
+    for feature in countries["features"]:
+        for polygon in feature["geometry"]["coordinates"]:
+            ring = np.asarray(polygon[0])
+            ax.fill(ring[:, 0], ring[:, 1], facecolor="#E3E3E3", edgecolor="#9A9A9A", lw=0.35)
+    ax.scatter([lon0], [lat0], marker="*", s=80, color=CORAL, edgecolor=DARK, lw=0.4, zorder=5)
+    ax.text(lon0, lat0 + 0.55, "Volve", fontsize=7, ha="center", va="bottom", zorder=6,
+            fontweight="bold")
+    for name, lon, lat in (("Norway", 8.6, 61.6), ("North Sea", 3.4, 56.2)):
+        ax.text(lon, lat, name, fontsize=6.2, color="#4D4D4D", ha="center", va="center",
+                style="italic")
+    ax.set_xlim(-4.0, 12.0)
+    ax.set_ylim(53.5, 62.5)
+    ax.set_aspect(1.0 / np.cos(np.deg2rad(58.0)))
+    ax.set_facecolor("#EAF4F8")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#7A8A90")
+        spine.set_linewidth(0.6)
+
+
+def wellhead_lonlat_map(ax, wellheads, letter, icons=True, locator=True):
+    """Official ED50 surface-wellhead positions on longitude/latitude axes (Fig. 3c)."""
+    coords = wellheads.set_index("well").loc[context.WELLS]
+    lon = coords["longitude_deg"].astype(float)
+    lat = coords["latitude_deg"].astype(float)
+    if not (np.isfinite(lon).all() and np.isfinite(lat).all()):
+        raise ValueError("Surface-wellhead registry contains non-finite coordinates")
+    if set(coords["geodetic_datum"]) != {"ED50"}:
+        raise ValueError("Surface-wellhead map is locked to ED50 coordinates")
+    lat0, lon0 = float(lat.mean()), float(lon.mean())
+    m_per_deg_lat = 111_320.0
+    m_per_deg_lon = 111_320.0 * np.cos(np.deg2rad(lat0))
+    ax.set_facecolor("#F3FAFC")
+    ax.set_axisbelow(True)
+    ax.grid(color="#C7DCE4", linewidth=0.6, linestyle=(0, (2, 3)))
+    for name in context.WELLS:
+        x, y = float(lon.loc[name]), float(lat.loc[name])
+        injector = name in context.WELLS[:2]
+        if icons:
+            icon = context.INJECTION_ICON if injector else context.PRODUCTION_ICON
+            ax.add_artist(AnnotationBbox(OffsetImage(icon, zoom=0.024), (x, y), frameon=False,
+                                         pad=0, zorder=6))
+        else:
+            ax.scatter(x, y, s=150, color=CORAL if injector else ORANGE,
+                       edgecolor=NAVY if injector else "#7A3B1E", lw=0.9, zorder=6)
+    offsets = {"15/9-F-4": (-24, -14), "15/9-F-5_inj": (8, -20), "15/9-F-1 C": (-26, 8),
+               "15/9-F-11": (-6, 17), "15/9-F-12": (24, -9), "15/9-F-14": (22, 7),
+               "15/9-F-15 D": (22, -14)}
+    for name in context.WELLS:
+        ax.annotate(context.SHORT[name], xy=(float(lon.loc[name]), float(lat.loc[name])),
+                    xytext=offsets[name], textcoords="offset points", ha="center", va="center",
+                    fontweight="bold", fontsize=8,
+                    bbox={"boxstyle": "round,pad=0.14", "fc": "white", "ec": "none", "alpha": 0.86},
+                    arrowprops={"arrowstyle": "-", "color": "#6E7D82", "lw": 0.6}, zorder=7)
+    # equal metres on both axes; the extra room to the east holds the regional inset
+    x_min, x_max = float(lon.min()) - 3.0 / m_per_deg_lon, float(lon.max()) + 6.5 / m_per_deg_lon
+    y_min, y_max = float(lat.min()) - 3.0 / m_per_deg_lat, float(lat.max()) + 4.0 / m_per_deg_lat
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.set_aspect(m_per_deg_lat / m_per_deg_lon)            # metres equal in both directions
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(4))
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(4))
+    ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%.5f"))
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.5f"))
+    ax.tick_params(labelsize=7.5)
+    ax.set_xlabel(r"Longitude ($^\circ$E, ED50)")
+    ax.set_ylabel(r"Latitude ($^\circ$N, ED50)")
+    metres = 5.0
+    sx = x_min + 0.06 * (x_max - x_min)
+    sy = y_min + 0.07 * (y_max - y_min)
+    tick = 0.012 * (y_max - y_min)
+    ax.plot([sx, sx + metres / m_per_deg_lon], [sy, sy], color=NAVY, lw=2.0)
+    for xx in (sx, sx + metres / m_per_deg_lon):
+        ax.plot([xx, xx], [sy - tick, sy + tick], color=NAVY, lw=1.0)
+    ax.text(sx + 0.5 * metres / m_per_deg_lon, sy + 2.2 * tick, "5 m", ha="center", va="bottom",
+            fontsize=8)
+    ax.annotate("N", xy=(0.06, 0.95), xytext=(0.06, 0.80), xycoords=ax.transAxes,
+                ha="center", va="center", color=NAVY, fontweight="bold", fontsize=8.5,
+                arrowprops={"arrowstyle": "-|>", "color": NAVY, "lw": 1.0}, zorder=9)
+    if locator:
+        _north_sea_locator(ax.inset_axes([0.58, 0.58, 0.41, 0.41]), lat0, lon0)
+    panel(ax, letter)
+
+
+def figure_field_context(icons=True, stem="actrn_field_context"):
     crm = pd.read_csv(PROC / "crm_lambda.csv", index_col=0)
     corr = pd.read_csv(PROC / "network_corr.csv", index_col=0)
     wellheads = pd.read_csv(PROC / "volve_surface_wellheads.csv")
     ref = (float(wellheads["latitude_deg"].mean()), float(wellheads["longitude_deg"].mean()))
     with plt.rc_context(STYLE):
-        fig = plt.figure(figsize=(7.2, 6.6), constrained_layout=True)
+        fig = plt.figure(figsize=(7.2, 6.4), constrained_layout=True)
         grid = fig.add_gridspec(2, 2)
         ax = [fig.add_subplot(grid[i, j]) for i in range(2) for j in range(2)]
         context._pattern_network(ax[0], crm, "a", r"CRM-P $\lambda$", signed=False,
                                  surface_reference=ref)
         context._pattern_network(ax[1], corr, "b", r"Pearson $r$", signed=True,
                                  surface_reference=ref)
-        context._surface_wellhead_map(ax[2], wellheads, "c")
-        (x0, x1), (y0, y1) = ax[2].get_xlim(), ax[2].get_ylim()
-        ax[2].set_xlim(x0 - 1.0, x1 + 1.0)   # keep edge labels inside the map frame
-        ax[2].set_ylim(y0 - 1.0, y1 + 1.0)
+        wellhead_lonlat_map(ax[2], wellheads, "c", icons=icons)
         operating_region(fig, ax[3], "d")
-        for a in ax[:3]:
+        for a in ax[:2]:
             a.set_box_aspect(1.0)
-        fig.legend(handles=[
-            Line2D([0], [0], marker="^", color="none", markerfacecolor=context.RED,
-                   markeredgecolor="#7A211B", markersize=8, label="Injection well"),
-            Line2D([0], [0], marker="^", color="none", markerfacecolor=context.BLUE,
-                   markeredgecolor="#173B61", markersize=8, label="Production well")],
-            loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2, frameon=False)
-        save(fig, "actrn_field_context")
+        handles = [Line2D([0], [0], marker="^", color="none", markerfacecolor=context.RED,
+                          markeredgecolor="#7A211B", markersize=8, label="Injection well"),
+                   Line2D([0], [0], marker="^", color="none", markerfacecolor=context.BLUE,
+                          markeredgecolor="#173B61", markersize=8, label="Production well")]
+        fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2,
+                   frameon=False)
+        save(fig, stem)
 
 
-# ----------------------------------------------------------------- Figures 5-6
-def box_strip(ax, runs, metric, order):
-    data = [runs.loc[runs["family"] == f, metric].to_numpy() for f in order]
-    box = ax.boxplot(data, positions=np.arange(len(order)), widths=0.55, patch_artist=True,
-                     showfliers=False, medianprops={"color": DARK, "linewidth": 1.0},
-                     whiskerprops={"color": "#777", "linewidth": 0.7},
-                     capprops={"color": "#777", "linewidth": 0.7})
-    for patch, f in zip(box["boxes"], order):
+# ----------------------------------------------------------------- Figures 4-5
+GROUPS = (("ACTRN", ["ACTRN"]), ("With ACTRN features", ENG), ("Deep sequence", SEQ),
+          ("Conventional", RAW))
+LONG = {"Ridge": "Ridge", "Random forest": "Random forest", "HGB": "HGB", "MLP": "MLP",
+        "RNN": "RNN", "LSTM": "LSTM", "Transformer": "Transformer", "Autoformer": "Autoformer",
+        "Reformer": "Reformer", "ACTRN": "ACTRN"}
+LONG.update({f"{m} (engineered)": f"{m} + F" for m in RAW})
+
+
+def model_rows():
+    """Row position of each model (ACTRN on top) and the span of each model group."""
+    pos, spans, y = {}, [], 0.0
+    for name, families in GROUPS:
+        start = y
+        for f in families:
+            pos[f] = y
+            y += 1.0
+        spans.append((name, start, y - 1.0))
+        y += 1.0
+    return pos, spans
+
+
+def group_bands(ax, spans, label=True):
+    for k, (name, start, end) in enumerate(spans):
+        if k % 2 == 1:
+            ax.axhspan(start - 1.0, end + 0.5, color="#F1F3F5", zorder=0, lw=0)
+        if label and name != "ACTRN":
+            ax.text(0.99, start - 0.78, name, transform=ax.get_yaxis_transform(), ha="right",
+                    va="center", fontsize=7, style="italic", color="#6B6B6B")
+
+
+def _model_axis(ax, pos, labels=True):
+    ax.set_yticks(list(pos.values()))
+    ax.set_yticklabels([LONG[f] for f in pos] if labels else [])
+    if labels:
+        for tick, f in zip(ax.get_yticklabels(), pos):
+            if f == "ACTRN":
+                tick.set_fontweight("bold")
+    ax.set_ylim(max(pos.values()) + 0.7, min(pos.values()) - 0.7)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(axis="x", color="#D7D7D7", linewidth=0.55, alpha=0.75)
+    ax.set_axisbelow(True)
+
+
+def hbox_strip(ax, runs, metric, pos, spans, labels=True):
+    families = list(pos)
+    data = [runs.loc[runs["family"] == f, metric].to_numpy() for f in families]
+    group_bands(ax, spans, label=labels)
+    box = ax.boxplot(data, positions=[pos[f] for f in families], vert=False, widths=0.62,
+                     patch_artist=True, showfliers=False,
+                     medianprops={"color": DARK, "linewidth": 1.0},
+                     whiskerprops={"color": "#777777", "linewidth": 0.7},
+                     capprops={"color": "#777777", "linewidth": 0.7})
+    for patch, f in zip(box["boxes"], families):
         patch.set_facecolor(COLOR[f])
-        patch.set_alpha(0.8 if f == "ACTRN" else (0.25 if f in ENG else 0.5))
+        patch.set_alpha(0.85 if f == "ACTRN" else (0.3 if f in ENG else 0.5))
         patch.set_edgecolor(COLOR[f])
         if f in ENG:
             patch.set_hatch("////")
-    for i, (f, v) in enumerate(zip(order, data)):
-        ax.scatter(i + np.linspace(-0.15, 0.15, len(v)), v, s=14, color=COLOR[f],
-                   edgecolor="white", linewidth=0.4, zorder=3)
-    ax.set_xticks(np.arange(len(order)))
-    ax.set_xticklabels([LABEL[f] for f in order], rotation=40, ha="right")
-    style_axis(ax)
+    for f, v in zip(families, data):
+        jitter = np.linspace(-0.2, 0.2, len(v))
+        ax.scatter(v, pos[f] + jitter, s=9, color=COLOR[f], edgecolor="white", linewidth=0.3,
+                   zorder=3)
+    _model_axis(ax, pos, labels)
 
 
-def paired(ax, runs, metric, other, ylabel):
+def paired(ax, runs, metric, other, xlabel_unused=None, ylabel=None):
     piv = runs.pivot(index="repeat", columns="family", values=metric)
     for r in piv.index:
-        ax.plot([0, 1], [piv.loc[r, other], piv.loc[r, "ACTRN"]], color="#B8B8B8", lw=0.9)
-    ax.scatter(np.zeros(len(piv)), piv[other], color=COLOR[other], edgecolor=DARK, lw=0.3, s=26,
+        ax.plot([0, 1], [piv.loc[r, other], piv.loc[r, "ACTRN"]], color="#B8B8B8", lw=0.8)
+    ax.scatter(np.zeros(len(piv)), piv[other], color=COLOR[other], edgecolor=DARK, lw=0.3, s=20,
                hatch="////" if other in ENG else None)
-    ax.scatter(np.ones(len(piv)), piv["ACTRN"], color=BLUE, s=26)
-    ax.scatter([0, 1], [piv[other].mean(), piv["ACTRN"].mean()], marker="D", s=46,
+    ax.scatter(np.ones(len(piv)), piv["ACTRN"], color=BLUE, s=20)
+    ax.scatter([0, 1], [piv[other].mean(), piv["ACTRN"].mean()], marker="D", s=40,
                color=[DARK, NAVY], zorder=4)          # diamonds = means (stated in caption)
-    ax.set_xlim(-0.4, 1.4)
+    ax.set_xlim(-0.45, 1.45)
     ax.set_xticks([0, 1])
-    ax.set_xticklabels([LABEL[other], "ACTRN"])
-    ax.set_ylabel(ylabel)
+    ax.set_xticklabels([LONG[other], "ACTRN"])
+    if ylabel:
+        ax.set_ylabel(ylabel)
     style_axis(ax)
 
 
@@ -322,65 +488,89 @@ def strongest(summary, metric, population="base", families=None):
 
 
 def figure_prediction(runs, summary):
-    runs = runs[runs["population"] == "base"]
-    other = strongest(summary, "nmae_pct")
-    fig, (a, b, c) = plt.subplots(1, 3, figsize=(7.2, 2.9), constrained_layout=True,
-                                  gridspec_kw={"width_ratios": [1.5, 0.55, 1.5]})
-    box_strip(a, runs, "nmae_pct", ORDER)
-    a.set_ylabel("NMAE (%)")
-    panel(a, "a")
-    paired(b, runs, "nmae_pct", other, "NMAE (%)")
-    panel(b, "b", x=-0.3)
-    box_strip(c, runs, "r2", ORDER)
-    c.set_ylabel("$R^2$")
-    panel(c, "c")
+    pos, spans = model_rows()
+    fig, axes = plt.subplots(2, 3, figsize=(7.2, 5.9), constrained_layout=True,
+                             gridspec_kw={"width_ratios": [1.45, 1.0, 0.72]})
+    comparators = {}
+    for row, population in enumerate(("base", "channelised")):
+        sub = runs[runs["population"] == population]
+        hbox_strip(axes[row, 0], sub, "nmae_pct", pos, spans)
+        axes[row, 0].set_xlabel("NMAE (%)")
+        hbox_strip(axes[row, 1], sub, "r2", pos, spans, labels=False)
+        axes[row, 1].set_xlabel("$R^2$")
+        other = strongest(summary, "nmae_pct", population)
+        comparators[population] = other
+        paired(axes[row, 2], sub, "nmae_pct", other, ylabel="NMAE (%)")
+        for col, letter in enumerate("abc" if row == 0 else "def"):
+            panel(axes[row, col], letter, x=-0.42 if col == 0 else -0.2)
     save(fig, "actrn_prediction_performance")
-    return other
+    return comparators
 
 
-def regret_means(ax, runs, dep):
-    """Mean relative regret per family (log scale) with the model-free references."""
-    rep = runs.groupby("family")["decision_regret_pct"]
-    means, sds = rep.mean().loc[ORDER], rep.std().loc[ORDER]
-    x = np.arange(len(ORDER))
-    for i, f in enumerate(ORDER):
-        ax.errorbar(i, means[f], yerr=sds[f], fmt="o", ms=7 if f == "ACTRN" else 5,
-                    color=COLOR[f], mfc="white" if f in ENG else COLOR[f], capsize=2.5, lw=1.0,
-                    zorder=3)
+def _references(dependence, population):
+    dep = dependence[(dependence["population"] == population) & (dependence["response"] == "exp")]
     per_repeat = dep.groupby("repeat")[["state_blind_regret_pct", "random_regret_pct"]].mean()
-    for col, ls, label in (("random_regret_pct", ":", "random candidate"),
-                           ("state_blind_regret_pct", "--", "state-blind reference")):
-        level = per_repeat[col].mean()
-        ax.axhline(level, color=CORAL if col.startswith("state") else GREY, lw=1.0, ls=ls)
-        ax.text(-0.3, level * 1.06, label, color=CORAL if col.startswith("state") else "#777777",
-                fontsize=7.5, ha="left", va="bottom")
-    ax.set_yscale("log")
-    ax.set_xlim(-0.6, len(ORDER) - 0.4)
-    ax.set_ylim(0.08, 9)
-    ax.set_yticks([0.1, 0.2, 0.5, 1, 2, 5])
-    ax.set_yticklabels(["0.1", "0.2", "0.5", "1", "2", "5"])
-    ax.set_xticks(x)
-    ax.set_xticklabels([LABEL[f] for f in ORDER], rotation=40, ha="right")
-    ax.set_ylabel("Mean relative regret (%)")
-    style_axis(ax)
+    return per_repeat.mean()
+
+
+def hviolin(ax, decisions, pos, spans, refs, labels=True):
+    group_bands(ax, spans, label=labels)
+    for f in pos:
+        v = decisions.loc[decisions["family"] == f, "decision_regret_pct"].to_numpy()
+        parts = ax.violinplot(v, positions=[pos[f]], vert=False, widths=0.82, showextrema=False)
+        for body in parts["bodies"]:
+            body.set_facecolor(COLOR[f])
+            body.set_edgecolor(COLOR[f])
+            body.set_alpha(0.85 if f == "ACTRN" else (0.3 if f in ENG else 0.5))
+            if f in ENG:
+                body.set_hatch("////")
+        ax.scatter([v.mean()], [pos[f]], marker="D", s=16, color=DARK, zorder=4)
+    for key, ls, color, text in (("state_blind_regret_pct", "--", CORAL, "state-blind"),
+                                 ("random_regret_pct", ":", "#7A7A7A", "random")):
+        ax.axvline(refs[key], color=color, lw=0.9, ls=ls, zorder=1)
+        ax.text(refs[key], 1.005, text, transform=ax.get_xaxis_transform(), color=color,
+                fontsize=7, ha="center", va="bottom")
+    ax.set_xscale("function", functions=(lambda v: np.sqrt(np.clip(v, 0, None)), np.square))
+    ax.set_xlim(0, 24)
+    ax.set_xticks([0, 1, 2, 5, 10, 20])
+    ax.set_xticklabels(["0", "1", "2", "5", "10", "20"])
+    _model_axis(ax, pos, labels)
+
+
+def selection_rates(ax, runs, pos, spans):
+    group_bands(ax, spans, label=False)
+    for f in pos:
+        sub = runs[runs["family"] == f]
+        for metric, marker, face in (("optimal_selection_pct", "o", COLOR[f]),
+                                     ("top_decile_selection_pct", "s", "white")):
+            ax.errorbar(sub[metric].mean(), pos[f] + (-0.17 if marker == "o" else 0.17),
+                        xerr=sub[metric].std(), fmt=marker, ms=4.2, color=COLOR[f], mfc=face,
+                        mec=COLOR[f], lw=0.8, capsize=1.6, zorder=3)
+    ax.set_xlim(0, 105)
+    _model_axis(ax, pos, labels=False)
 
 
 def figure_decision(runs, summary, decisions, dependence):
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.8), constrained_layout=True,
-                             gridspec_kw={"width_ratios": [1.6, 0.75]})
+    pos, spans = model_rows()
+    fig, axes = plt.subplots(2, 3, figsize=(7.2, 6.1), constrained_layout=True,
+                             gridspec_kw={"width_ratios": [1.45, 1.0, 0.72]})
     comparators = {}
-    for row, (population, title) in enumerate((("base", "Base population"),
-                                               ("channelised", "Channelised population"))):
+    for row, population in enumerate(("base", "channelised")):
         sub = runs[runs["population"] == population]
-        dep = dependence[(dependence["population"] == population)
-                         & (dependence["response"] == "exp")]
-        regret_means(axes[row, 0], sub, dep)
-        axes[row, 0].set_title(title, fontsize=9.5, loc="left", x=0.02)
-        panel(axes[row, 0], "ac"[row], x=-0.1)
+        dec = decisions[decisions["population"] == population]
+        hviolin(axes[row, 0], dec, pos, spans, _references(dependence, population))
+        axes[row, 0].set_xlabel("Relative regret per decision (%)")
+        selection_rates(axes[row, 1], sub, pos, spans)
+        axes[row, 1].set_xlabel("Selection rate (%)")
         other = strongest(summary, "decision_regret_pct", population)
         comparators[population] = other
-        paired(axes[row, 1], sub, "decision_regret_pct", other, "Mean relative regret (%)")
-        panel(axes[row, 1], "bd"[row], x=-0.38)
+        paired(axes[row, 2], sub, "decision_regret_pct", other, ylabel="Mean relative regret (%)")
+        for col, letter in enumerate("abc" if row == 0 else "def"):
+            panel(axes[row, col], letter, x=-0.42 if col == 0 else -0.2)
+    axes[0, 1].legend([Line2D([0], [0], marker="o", color=DARK, ls="none", ms=4.2),
+                       Line2D([0], [0], marker="s", color=DARK, mfc="white", ls="none", ms=4.2)],
+                      ["exact optimum", "top decile"], loc="lower center",
+                      bbox_to_anchor=(0.5, 1.0), ncol=2, frameon=False, fontsize=7.5)
     save(fig, "actrn_decision_performance")
     return comparators
 
@@ -395,17 +585,17 @@ def figure_sensitivity(curve, sens, summary, selection):
     ax = axes.ravel()
 
     def reference(a):
-        for p, label, color, _ in pops:
-            a.axhline(best[p], color=color, lw=0.9, ls="--", alpha=0.8)
-        a.set_ylim(0, None)
+        for p, _, color, _ in pops:
+            a.axhline(best[p], color=color, lw=0.9, ls="--", alpha=0.85, zorder=1)
+        a.set_ylim(0, 0.92)
         style_axis(a)
 
     size = {"8x18x6": 864, "16x18x6": 1728, "32x18x6": 3456}
-    for p, label, color, marker in pops:
+    for p, _, color, marker in pops:
         mean = curve[(curve.population == p) & (curve.family == "ACTRN")].groupby(
             "train_subset")["decision_regret_pct"].mean()
         ax[0].plot(list(size.values()), [mean[k] for k in size], color=color, marker=marker,
-                   ms=4.5, lw=1.4, label=label)
+                   ms=4.5, lw=1.4)
         ax[0].scatter([1728], [mean["32x18x3"]], marker=marker, facecolor="white",
                       edgecolor=color, s=26, zorder=4)
     ax[0].set_xscale("log", base=2)
@@ -419,13 +609,12 @@ def figure_sensitivity(curve, sens, summary, selection):
                  ("learning_rate", "Learning rate", True))
     default = {"latent_dim": 16, "l2": 1e-3, "ensemble": 5, "learning_rate": 0.002}
     for a, (axis, xlabel, logx) in zip(ax[1:5], axes_spec):
-        others = [k for k in default if k != axis]
         sub = sens.copy()
-        for k in others:
+        for k in (k for k in default if k != axis):
             sub = sub[np.isclose(sub[f"cfg_{k}"], default[k])]
-        for p, label, color, marker in pops:
+        for p, _, color, marker in pops:
             m = sub[sub.population == p].groupby(f"cfg_{axis}")["decision_regret_pct"].mean()
-            a.plot(m.index, m.values, color=color, marker=marker, ms=4.5, lw=1.4, label=label)
+            a.plot(m.index, m.values, color=color, marker=marker, ms=4.5, lw=1.4)
         if logx:
             a.set_xscale("log", base=2 if axis == "latent_dim" else 10)
         if axis == "latent_dim":
@@ -443,30 +632,31 @@ def figure_sensitivity(curve, sens, summary, selection):
     sel = selection.set_index(["population", "response", "family"])
     reg = summary.set_index(["population", "response", "family"])
     x = np.arange(2)
-    for i, (p, label, color, _) in enumerate(pops):
-        bl = [f for f in BASELINES]
-        vals_regret = [reg.loc[(p, "exp", "ACTRN"), "decision_regret_pct_mean"],
-                       reg.loc[(p, "exp"), "decision_regret_pct_mean"].loc[bl].min()]
-        vals_nmae = [sel.loc[(p, "exp", "ACTRN"), "decision_regret_pct_mean"],
-                     sel.loc[(p, "exp"), "decision_regret_pct_mean"].loc[bl].min()]
-        ax[5].bar(x + (i - 0.5) * 0.38, [vals_regret[0], vals_nmae[0]], width=0.36,
-                  color=color, label=f"{label}: ACTRN")
-        ax[5].scatter(x + (i - 0.5) * 0.38, [vals_regret[1], vals_nmae[1]], marker="_",
-                      s=260, color=DARK, lw=1.6, zorder=4,
-                      label="best baseline" if i == 0 else None)
+    for i, (p, _, color, _) in enumerate(pops):
+        actrn = [reg.loc[(p, "exp", "ACTRN"), "decision_regret_pct_mean"],
+                 sel.loc[(p, "exp", "ACTRN"), "decision_regret_pct_mean"]]
+        base = [reg.loc[(p, "exp"), "decision_regret_pct_mean"].loc[BASELINES].min(),
+                sel.loc[(p, "exp"), "decision_regret_pct_mean"].loc[BASELINES].min()]
+        offset = (i - 0.5) * 0.42
+        ax[5].bar(x + offset - 0.1, actrn, width=0.2, color=color)
+        ax[5].bar(x + offset + 0.1, base, width=0.2, color="white", edgecolor=color, hatch="////",
+                  lw=0.8)
     ax[5].set_xticks(x)
-    ax[5].set_xticklabels(["by validation\nregret", "by validation\nNMAE"])
-    ax[5].set_xlabel("Candidate selection rule")
-    ax[5].set_ylim(0, None)
+    ax[5].set_xticklabels(["Validation\nregret", "Validation\nNMAE"])
+    ax[5].set_xlabel("Selection rule")
+    ax[5].set_ylim(0, 0.92)
     style_axis(ax[5])
     for a, letter in zip(ax, "abcdef"):
         a.set_ylabel("Mean relative regret (%)")
         panel(a, letter, x=-0.3)
-    handles, labels = ax[1].get_legend_handles_labels()
-    handles += [Line2D([0], [0], color="#777777", ls="--", lw=0.9),
-                Line2D([0], [0], marker="_", color=DARK, ls="none", ms=12, mew=1.6)]
-    labels += ["best baseline (full data, default rule)", "best baseline under the same rule"]
-    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=4,
+    handles = [Line2D([0], [0], color=BLUE, marker="o", ms=4.5, lw=1.4),
+               Line2D([0], [0], color=CORAL, marker="s", ms=4.5, lw=1.4),
+               Line2D([0], [0], color=BLUE, ls="--", lw=0.9),
+               Line2D([0], [0], color=CORAL, ls="--", lw=0.9),
+               plt.Rectangle((0, 0), 1, 1, facecolor="white", edgecolor=DARK, hatch="////", lw=0.8)]
+    labels = ["ACTRN, base", "ACTRN, channelised", "Best baseline, base",
+              "Best baseline, channelised", "Best baseline (f)"]
+    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=5,
                frameon=False, fontsize=7.5)
     save(fig, "actrn_sensitivity")
 
@@ -475,8 +665,8 @@ def figure_sensitivity(curve, sens, summary, selection):
 def figure_field(metrics, decision, backtest, case):
     mean = metrics.groupby("family")["nmae_pct"].mean()
     best = [mean.loc[group].idxmin() for group in (RAW, SEQ, ENG)]
-    order = ["Persistence"] + best + ["ACTRN"]     # panel b shows every model
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.6), constrained_layout=True)
+    order = ["Persistence"] + best + ["ACTRN"]
+    fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.2), constrained_layout=True)
     a, b, c, d = axes.ravel()
     for f in order:
         sub = metrics[metrics["family"] == f].sort_values("fold")
@@ -485,25 +675,35 @@ def figure_field(metrics, decision, backtest, case):
                ls="--" if f == "Persistence" else (":" if f in ENG else "-"),
                mfc="white" if f in ENG else None,
                lw=2.0 if f == "ACTRN" else 1.2, alpha=1.0 if f == "ACTRN" else 0.85,
-               label=LABEL[f])
+               label=LONG.get(f, f))
     a.set_xlabel("Rolling origin")
     a.set_ylabel("NMAE (%)")
     a.set_xticks([1, 2, 3, 4])
-    a.legend(ncol=2, frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=8)
+    a.legend(ncol=2, frameon=False, loc="upper right", fontsize=7.5)
     style_axis(a)
-    panel(a, "a", y=1.18)
-    avg = metrics.groupby("family", as_index=False)["nmae_pct"].mean().sort_values("nmae_pct")
+    panel(a, "a")
+    avg = metrics.groupby("family", as_index=False)["nmae_pct"].mean().sort_values(
+        "nmae_pct", ascending=False)
     pos = np.arange(len(avg))
-    b.hlines(pos, 0, avg["nmae_pct"], color=[COLOR[f] for f in avg["family"]], lw=2.0, alpha=0.8)
-    b.scatter(avg["nmae_pct"], pos, s=[44 if f == "ACTRN" else 30 for f in avg["family"]],
-              color=["white" if f in ENG else COLOR[f] for f in avg["family"]],
-              edgecolor=[COLOR[f] for f in avg["family"]], linewidth=1.2, zorder=3)
+    cap = 60.0
+    for y, (f, v) in zip(pos, zip(avg["family"], avg["nmae_pct"])):
+        shown = min(v, cap)
+        b.hlines(y, 0, shown, color=COLOR[f], lw=2.0, alpha=0.8)
+        b.scatter(shown, y, s=44 if f == "ACTRN" else 28, color="white" if f in ENG else COLOR[f],
+                  edgecolor=COLOR[f], lw=1.2, zorder=3, marker=">" if v > cap else "o")
+        if v > cap:
+            b.text(cap - 1.0, y + 0.42, f"{v:.0f}", ha="right", va="center", fontsize=7)
+    persistence = mean.loc["Persistence"]
+    b.axvline(persistence, color="#555555", lw=0.8, ls="--", zorder=1)
     b.set_yticks(pos)
-    b.set_yticklabels([LABEL[f] for f in avg["family"]])
+    b.set_yticklabels([LONG.get(f, f) for f in avg["family"]], fontsize=7.5)
+    for tick, f in zip(b.get_yticklabels(), avg["family"]):
+        if f == "ACTRN":
+            tick.set_fontweight("bold")
     b.set_xlabel("Mean NMAE across origins (%)")
-    b.set_xlim(left=0)
+    b.set_xlim(0, cap + 2)
     style_axis(b, "x")
-    panel(b, "b", x=-0.3)
+    panel(b, "b", x=-0.36)
     steps = decision["step"].to_numpy()
     schedules = [("selected", decision["injector_1_m3"], decision["injector_2_m3"], -0.2, None),
                  ("implemented", backtest["implemented_injector_1_m3"],
@@ -519,10 +719,12 @@ def figure_field(metrics, decision, backtest, case):
     c.set_xticks(steps)
     top_c = max((decision["injector_1_m3"] + decision["injector_2_m3"]).max(),
                 (backtest["implemented_injector_1_m3"] + backtest["implemented_injector_2_m3"]).max())
-    c.set_ylim(0, 1.45 * top_c / 1e3)                 # head-room for the legend
+    c.set_ylim(0, 1.45 * top_c / 1e3)
     c.legend(frameon=False, loc="upper left", fontsize=7.5, ncol=2)
     style_axis(c)
     panel(c, "c")
+    d.fill_between(steps, backtest["predicted_under_implemented_m3"] / 1e3,
+                   decision["predicted_field_oil_m3"] / 1e3, color=CORAL, alpha=0.12, lw=0)
     d.plot(steps, decision["predicted_field_oil_m3"] / 1e3, color=CORAL, marker="D", ms=4,
            label="Predicted, selected schedule")
     d.plot(steps, backtest["predicted_under_implemented_m3"] / 1e3, color=BLUE, ls="--",
@@ -534,7 +736,7 @@ def figure_field(metrics, decision, backtest, case):
     d.set_ylabel(r"Field oil ($10^3$ m$^3$ week$^{-1}$)")
     d.set_xticks(steps)
     top = max(decision["predicted_field_oil_m3"].max(), backtest["predicted_under_implemented_m3"].max())
-    d.set_ylim(0, 1.6 * top / 1e3)                     # head-room for the legend
+    d.set_ylim(0, 1.6 * top / 1e3)
     d.legend(frameon=False, fontsize=7.5, loc="upper left", ncol=1)
     style_axis(d)
     panel(d, "d")
