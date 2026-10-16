@@ -1,0 +1,42 @@
+.venv/lib/python3.11/site-packages/sklearn/neural_network/_multilayer_perceptron.py:785: ConvergenceWarning: Stochastic Optimizer: Maximum iterations (700) reached and the optimization hasn't converged yet.
+  warnings.warn(
+.venv/lib/python3.11/site-packages/sklearn/neural_network/_multilayer_perceptron.py:785: ConvergenceWarning: Stochastic Optimizer: Maximum iterations (700) reached and the optimization hasn't converged yet.
+  warnings.warn(
+{
+  "wall_seconds": 717.977846029913,
+  "benchmark": {
+    "jobs": 1500,
+    "fit_seconds_total": 21458.59788926714
+  },
+  "field": {
+    "jobs": 296,
+    "case": {
+      "case_decision_date": "2015-05-24",
+      "case_index": 361,
+      "case_level_m3": 20787.54,
+      "latest_candidate_block": "2015-03-29",
+      "budget_m3": 603918.083755,
+      "library_size": 52,
+      "selected_source_block": "2009-04-12",
+      "selected_predicted_cumulative_m3": 207148.62089829572,
+      "candidate_predicted_cumulative_range_m3": [
+        130295.14226557323,
+        207148.62089829572
+      ],
+      "candidates_with_any_clipped_step": 0,
+      "implemented_schedule_total_m3": 528094.58032625,
+      "implemented_predicted_cumulative_m3": 175906.89487148967,
+      "implemented_observed_cumulative_m3": 149564.87,
+      "clip_bounds_m3": [
+        0.0,
+        62641.81
+      ],
+      "case_params": {
+        "latent_dim": 8,
+        "learning_rate": 0.0005,
+        "l2": 0.1
+      }
+    }
+  }
+}
+exit 0

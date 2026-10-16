@@ -1,12 +1,12 @@
-"""Render the ACTRN manuscript data figures (Figures 2 and 4-7) from registered v2 outputs.
+"""Render the ACTRN manuscript data figures (Figures 2 and 4-7) from registered v3 outputs.
 
-Reads ``data/processed/actrn_v2`` (written by ``actrn_experiments.py``) plus the Volve
+Reads ``data/processed/actrn_v3`` (written by ``actrn_experiments.py``) plus the Volve
 context tables, and writes PDF/PNG pairs to ``paper/fuel_2026/figures``.  Figure 3 is
 the field-state figure from ``render_p17_full_figure_suite.py``; Figure 1 is the editable
 PowerPoint schematic.  No fallback or placeholder data are permitted.
 
 Usage (from the project root):
-    .venv/bin/python code/render_actrn_figures.py [--results data/processed/actrn_v2]
+    .venv/bin/python code/render_actrn_figures.py [--results data/processed/actrn_v3]
 """
 from __future__ import annotations
 
@@ -31,6 +31,21 @@ PROC = ROOT / "data" / "processed"
 FIGURES = ROOT / "paper" / "fuel_2026" / "figures"
 sys.path.insert(0, str(ROOT / "code"))
 
+
+
+def _register_times_new_roman() -> None:
+    """Matplotlib skips upper-case .TTF files; register fontconfig's Times New Roman faces."""
+    import subprocess
+    listing = subprocess.run(["fc-list", ":family=Times New Roman", "file"], capture_output=True,
+                             text=True).stdout
+    for line in listing.splitlines():
+        path = line.split(":")[0].strip()
+        if path:
+            font_manager.fontManager.addfont(path)
+
+
+_register_times_new_roman()
+
 from action_conditioned_decision import allocate_budget, make_reservoir, rollout  # noqa: E402
 import render_p17_full_figure_suite as context  # noqa: E402
 
@@ -40,6 +55,7 @@ ORANGE = "#EF8A47"
 RAW = ["Ridge", "Random forest", "HGB", "MLP"]
 ENG = [f"{m} (engineered)" for m in RAW]
 ORDER = RAW + ENG + ["ACTRN"]
+N_REPEATS = 10
 LABEL = {"Ridge": "Ridge", "Random forest": "RF", "HGB": "HGB", "MLP": "MLP",
          "ACTRN": "ACTRN", "Persistence": "Persistence"}
 LABEL.update({f"{m} (engineered)": f"{LABEL[m]}+F" for m in RAW})
@@ -91,7 +107,7 @@ def save(fig, stem):
 
 def read_results(results: Path) -> dict:
     expected = {"benchmark_runs.csv": None, "benchmark_decisions.csv": None,
-                "benchmark_summary.csv": None, "field_rolling_metrics.csv": 24,
+                "benchmark_summary.csv": None, "field_rolling_metrics.csv": 40,
                 "field_case_decision.csv": 8, "field_case_backtest.csv": 8,
                 "field_case_candidates.csv": None}
     frames = {}
@@ -103,7 +119,7 @@ def read_results(results: Path) -> dict:
     runs = frames["benchmark_runs"]
     runs = runs[runs["response"] == "exp"]
     missing = set(ORDER) - set(runs["family"])
-    if missing or runs.groupby("family").size().loc[ORDER].ne(5).any():
+    if missing or runs.groupby("family").size().loc[ORDER].ne(N_REPEATS).any():
         raise ValueError(f"benchmark runs incomplete: missing {sorted(missing)}")
     frames["benchmark_runs"] = runs
     dec = frames["benchmark_decisions"]
@@ -186,6 +202,21 @@ def operating_region(fig, ax, letter):
     cb.set_label(r"Observed 8-week field oil ($10^3$ m$^3$)")
     style_axis(ax, None)
     panel(ax, letter)
+
+
+def figure_field_state():
+    """Figure 3 from the field-state renderer, written into the manuscript figure folder."""
+    import shutil
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        context.OUT, context.FIG = Path(tmp), Path(tmp) / "figures"
+        context.SERIF_FONT = FONT
+        plt.rcParams.update({"font.serif": [FONT]})
+        produced = context.render_figure_2()
+        for path in produced:
+            if path.suffix in (".pdf", ".png"):
+                shutil.copy(path, FIGURES / f"actrn_field_state{path.suffix}")
+    plt.rcParams.update(STYLE)
 
 
 def figure_field_context():
@@ -314,26 +345,31 @@ def figure_decision(runs, summary, decisions):
 
 # ----------------------------------------------------------------- Figure 7
 def figure_field(metrics, decision, backtest, case):
-    order = ["Persistence", "Ridge", "Random forest", "HGB", "MLP", "ACTRN"]
+    mean = metrics.groupby("family")["nmae_pct"].mean()
+    best_raw, best_eng = mean.loc[RAW].idxmin(), mean.loc[ENG].idxmin()
+    order = ["Persistence", best_raw, best_eng, "ACTRN"]     # panel b shows every model
     fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.6), constrained_layout=True)
     a, b, c, d = axes.ravel()
     for f in order:
         sub = metrics[metrics["family"] == f].sort_values("fold")
         a.plot(sub["fold"] + 1, sub["nmae_pct"], marker="o", ms=4,
                color="#555555" if f == "Persistence" else COLOR[f],
-               ls="--" if f == "Persistence" else "-",
-               lw=2.0 if f == "ACTRN" else 1.0, alpha=1.0 if f == "ACTRN" else 0.8, label=LABEL[f])
+               ls="--" if f == "Persistence" else (":" if f in ENG else "-"),
+               mfc="white" if f in ENG else None,
+               lw=2.0 if f == "ACTRN" else 1.2, alpha=1.0 if f == "ACTRN" else 0.85,
+               label=LABEL[f])
     a.set_xlabel("Rolling origin")
     a.set_ylabel("NMAE (%)")
     a.set_xticks([1, 2, 3, 4])
-    a.legend(ncol=3, frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=8)
+    a.legend(ncol=2, frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=8)
     style_axis(a)
     panel(a, "a", y=1.18)
     avg = metrics.groupby("family", as_index=False)["nmae_pct"].mean().sort_values("nmae_pct")
     pos = np.arange(len(avg))
     b.hlines(pos, 0, avg["nmae_pct"], color=[COLOR[f] for f in avg["family"]], lw=2.0, alpha=0.8)
     b.scatter(avg["nmae_pct"], pos, s=[44 if f == "ACTRN" else 30 for f in avg["family"]],
-              color=[COLOR[f] for f in avg["family"]], zorder=3)
+              color=["white" if f in ENG else COLOR[f] for f in avg["family"]],
+              edgecolor=[COLOR[f] for f in avg["family"]], linewidth=1.2, zorder=3)
     b.set_yticks(pos)
     b.set_yticklabels([LABEL[f] for f in avg["family"]])
     b.set_xlabel("Mean NMAE across origins (%)")
@@ -361,8 +397,8 @@ def figure_field(metrics, decision, backtest, case):
     d.set_ylabel(r"Field oil ($10^3$ m$^3$ week$^{-1}$)")
     d.set_xticks(steps)
     top = max(decision["predicted_field_oil_m3"].max(), backtest["predicted_under_implemented_m3"].max())
-    d.set_ylim(0, 1.55 * top / 1e3)                    # head-room for the legend
-    d.legend(frameon=False, fontsize=7.5, loc="upper left", ncol=2)
+    d.set_ylim(0, 1.6 * top / 1e3)                     # head-room for the legend
+    d.legend(frameon=False, fontsize=7.5, loc="upper left", ncol=1)
     style_axis(d)
     panel(d, "d")
     save(fig, "actrn_field_decision")
@@ -370,10 +406,11 @@ def figure_field(metrics, decision, backtest, case):
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--results", default=str(PROC / "actrn_v2"))
+    ap.add_argument("--results", default=str(PROC / "actrn_v3"))
     args = ap.parse_args()
     r = read_results(Path(args.results))
     figure_benchmark_design()
+    figure_field_state()
     figure_field_context()
     pred_other = figure_prediction(r["benchmark_runs"], r["benchmark_summary"])
     dec_other = figure_decision(r["benchmark_runs"], r["benchmark_summary"],

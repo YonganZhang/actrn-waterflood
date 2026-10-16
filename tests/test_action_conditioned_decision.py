@@ -8,11 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "code"))
 
 from action_conditioned_decision import (  # noqa: E402
-    ACTRN,
     build_field_case_dataset,
     sample_plan,
     simulate_dataset,
 )
+from actrn_model import ACTRN  # noqa: E402
 
 
 def test_candidate_plan_preserves_fixed_budget_and_bounds():
@@ -60,13 +60,11 @@ def test_actrn_fits_action_conditioned_multioutput_signal():
     test = np.arange(210, 240)
     model = ACTRN(
         latent_dim=12,
-        fusion_dim=16,
         learning_rate=0.003,
         l2=0.001,
         max_epochs=350,
         patience=45,
-        cumulative_weight=0.0,
-        ranking_weight=0.0,
+        ensemble=2,
         seed=17,
     ).fit(
         histories[train],

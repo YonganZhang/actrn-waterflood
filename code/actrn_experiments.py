@@ -1,13 +1,16 @@
-"""ACTRN v2 experiment protocol.
+"""ACTRN v3 experiment protocol.
 
 Runs the registered protocol in ``docs/PROTOCOL.md``:
 equal-budget validation tuning for every model, component ablations, feature-parity
-baselines, an alternative-saturation robustness benchmark, paired statistics, and a
-leakage-free rolling-origin field evaluation with a look-ahead-free decision example.
+baselines, an alternative-saturation robustness benchmark, paired statistics over the five
+v2 repeats and five fresh repeats, and a leakage-free rolling-origin field evaluation with a
+look-ahead-free decision example.  The v2 protocol and runner are at git tag
+``actrn-v2-registered``.
 
 Usage (from the project root):
-    .venv/bin/python code/actrn_experiments.py [--workers 24] [--out data/processed/actrn_v2]
-    .venv/bin/python code/actrn_experiments.py --quick --out _tmp/actrn_v2_quick
+    .venv/bin/python code/actrn_experiments.py [--workers 40] [--out data/processed/actrn_v3]
+    .venv/bin/python code/actrn_experiments.py --quick --out _tmp/actrn_v3_quick
+    .venv/bin/python code/actrn_experiments.py --dev --out _tmp/actrn_v3_dev   # development seeds
 
 Outputs are CSV/JSON files plus ``manifest.json`` (environment, git state, protocol hash,
 seeds, timings and output hashes).  Registered v1 outputs are never overwritten.
@@ -37,7 +40,6 @@ import pandas as pd
 from scipy import stats
 
 from action_conditioned_decision import (
-    ACTRN,
     FlatModel,
     _sha256,
     build_field_case_dataset,
@@ -46,15 +48,24 @@ from action_conditioned_decision import (
     score_decision_sets,
     simulate_dataset,
 )
+from actrn_model import ACTRN
 
 ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL = ROOT / "docs" / "PROTOCOL.md"
 BASELINES = ("Ridge", "Random forest", "HGB", "MLP")
+FAMILIES = ("ACTRN",) + BASELINES + tuple(f"{b} (engineered)" for b in BASELINES)
 ABLATIONS = {
-    "ACTRN w/o ranking loss": {"ranking_weight": 0.0},
-    "ACTRN w/o interaction": {"use_interaction": False},
+    "ACTRN w/o contrastive learning": {"contrastive": False},
+    "ACTRN w/o interaction": {"interaction": "none"},
+    "ACTRN w/o response proxies": {"history_proxies": False},
     "ACTRN raw action input": {"action_features": "raw"},
+    "ACTRN linear response": {"nonlinear": False},
+    "ACTRN concatenation interaction": {"interaction": "concat"},
 }
+DATA_SEED_BASE = 20260716      # registered benchmark draws: base + 1009 * repeat
+DEV_SEED_BASE = 910_000        # development draws used while designing v3 (never reported)
+REGISTERED_REPEATS = tuple(range(5))     # the five v2 repeats
+FRESH_REPEATS = tuple(range(5, 10))      # first run under v3
 FIELD_GAP = 8          # = planning horizon: all fitting labels precede the next block
 FIELD_VALIDATION = 30
 FIELD_TEST = 60
@@ -71,7 +82,7 @@ def _grid(**axes):
 
 GRIDS = {
     "benchmark": {
-        "ACTRN": _grid(latent_dim=[32, 48], learning_rate=[0.002, 0.003], l2=[1e-4, 1e-3]),
+        "ACTRN": _grid(latent_dim=[16, 32], learning_rate=[0.001, 0.002], l2=[1e-4, 1e-3]),
         "Ridge": _grid(alpha=[0.1, 0.3, 1, 3, 10, 30, 100, 300]),
         "Random forest": _grid(max_depth=[8, 14, 20, None], min_samples_leaf=[1, 3]),
         "HGB": _grid(learning_rate=[0.05, 0.1], max_leaf_nodes=[24, 48],
@@ -92,14 +103,14 @@ GRIDS = {
 
 
 def make_actrn(setting: str, params: dict, seed: int, **overrides) -> ACTRN:
-    latent = int(params["latent_dim"])
     if setting == "benchmark":
-        base = dict(fusion_dim=latent + 16, max_epochs=900, patience=80, ranking_weight=3.0)
+        base = dict(max_epochs=900, patience=80,
+                    level_alphas=(0.1, 0.3, 1, 3, 10, 30, 100, 300, 1000))
     else:
-        base = dict(fusion_dim=int(round(1.5 * latent)), max_epochs=1200, patience=100,
-                    ranking_weight=0.0)
-    base.update(latent_dim=latent, learning_rate=params["learning_rate"], l2=params["l2"],
-                batch_size=128, cumulative_weight=0.0, seed=seed)
+        base = dict(max_epochs=1200, patience=100,
+                    level_alphas=(1, 3, 10, 30, 100, 300, 1000, 3000))
+    base.update(latent_dim=int(params["latent_dim"]), learning_rate=params["learning_rate"],
+                l2=params["l2"], ensemble=5, action_alphas=(0.01, 0.1, 1, 10), seed=seed)
     base.update(overrides)
     return ACTRN(**base)
 
@@ -115,8 +126,8 @@ def family_kind(family: str) -> tuple[str, str]:
 
 # ----------------------------------------------------------------- benchmark
 @functools.lru_cache(maxsize=4)
-def benchmark_data(repeat: int, response: str):
-    data_seed = 20260716 + repeat * 1009
+def benchmark_data(repeat: int, response: str, seed_base: int = DATA_SEED_BASE):
+    data_seed = seed_base + repeat * 1009
     h, a, y, groups, contexts, context_ids = simulate_dataset(
         n_reservoirs=48, seed=data_seed, return_context_ids=True, response=response)
     split = {"train": groups < 32, "validation": (groups >= 32) & (groups < 40),
@@ -129,7 +140,8 @@ def benchmark_data(repeat: int, response: str):
 
 def benchmark_job(spec: dict) -> dict:
     repeat, response, family = spec["repeat"], spec["response"], spec["family"]
-    data_seed, h, a, y, context_ids, s, decision_sets = benchmark_data(repeat, response)
+    data_seed, h, a, y, context_ids, s, decision_sets = benchmark_data(
+        repeat, response, spec.get("seed_base", DATA_SEED_BASE))
     kind, features = family_kind(family)
     seed = 42 + repeat
     t0 = time.perf_counter()
@@ -139,7 +151,7 @@ def benchmark_job(spec: dict) -> dict:
                   validation_data=(h[s["validation"]], a[s["validation"]], y[s["validation"]]),
                   context_ids=context_ids[s["train"]],
                   validation_context_ids=context_ids[s["validation"]])
-        epochs = model.n_epochs_
+        epochs = json.dumps(model.epochs_)
     else:
         model = FlatModel(kind, seed=seed, params=spec["params"], features=features)
         model.fit(h[s["train"]], a[s["train"]], y[s["train"]])
@@ -185,12 +197,13 @@ def field_predict(model, idx, bounds):
 def field_fit(family: str, params: dict, seed: int, blocks: dict):
     hist, act, out, dates, level, scale, target = field_data()
     tr, va = blocks["train"], blocks["validation"]
-    if family == "ACTRN":
+    kind, features = family_kind(family)
+    if kind == "ACTRN":
         model = make_actrn("field", params, seed)
         model.fit(hist[tr], act[tr], target[tr],
                   validation_data=(hist[va], act[va], target[va]))
     else:
-        model = FlatModel(family, seed=seed, params=params, features="raw")
+        model = FlatModel(kind, seed=seed, params=params, features=features)
         model.fit(hist[tr], act[tr], target[tr])
     bounds = (float(np.quantile(out[tr], 0.025)), float(np.quantile(out[tr], 0.975)))
     return model, bounds
@@ -283,44 +296,62 @@ def select_best(tuning: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
     return order.groupby(keys, sort=False).head(1)
 
 
+def _bootstrap_mean(groups: list[np.ndarray], rng: np.random.Generator) -> np.ndarray:
+    """Means of BOOTSTRAP_DRAWS resamples that redraw contexts within each repeat."""
+    total = np.zeros(BOOTSTRAP_DRAWS)
+    for g in groups:
+        total += g[rng.integers(0, len(g), (BOOTSTRAP_DRAWS, len(g)))].sum(axis=1)
+    return total / sum(len(g) for g in groups)
+
+
+def _compare(rep: pd.DataFrame, ctx: pd.DataFrame, other: str, rng) -> dict:
+    entry = {}
+    for metric in ("nmae_pct", "decision_regret_pct", "optimal_selection_pct",
+                   "top_decile_selection_pct"):
+        diff = (rep[metric]["ACTRN"] - rep[metric][other]).to_numpy()
+        entry[metric] = {
+            "mean_actrn": float(rep[metric]["ACTRN"].mean()),
+            "mean_other": float(rep[metric][other].mean()),
+            "mean_diff": float(diff.mean()),
+            "repeats_actrn_lower": int(np.sum(diff < 0)),
+            "wilcoxon_exact_p": (float(stats.wilcoxon(diff, method="exact").pvalue)
+                                 if np.any(diff != 0) else 1.0),
+        }
+    d = (ctx["ACTRN"] - ctx[other]).dropna()
+    boot = _bootstrap_mean([d.xs(r, level="repeat").to_numpy()
+                            for r in sorted(d.index.unique("repeat"))], rng)
+    entry["context_regret_pct"] = {
+        "n": int(len(d)), "actrn_better": int((d < 0).sum()),
+        "other_better": int((d > 0).sum()), "ties": int((d == 0).sum()),
+        "mean_diff": float(d.mean()),
+        "bootstrap95": [float(np.quantile(boot, 0.025)), float(np.quantile(boot, 0.975))],
+        "wilcoxon_p": (float(stats.wilcoxon(d.to_numpy()).pvalue)
+                       if np.any(d.to_numpy() != 0) else 1.0),
+    }
+    return entry
+
+
 def paired_statistics(runs: pd.DataFrame, decisions: pd.DataFrame) -> dict:
+    """ACTRN versus every other family, for all repeats and for the v2 / fresh subsets."""
     rng = np.random.default_rng(BOOTSTRAP_SEED)
+    present = set(runs["repeat"])
+    subsets = {"all": sorted(present), "registered": [r for r in REGISTERED_REPEATS if r in present],
+               "fresh": [r for r in FRESH_REPEATS if r in present]}
     result = {}
     for response, rr in runs.groupby("response"):
         dd = decisions[decisions["response"] == response]
-        ctx = dd.pivot_table(index=["repeat", "reservoir_id", "decision_age"],
-                             columns="family", values="decision_regret_pct")
-        rep = rr.pivot(index="repeat", columns="family")
-        out = {}
-        for other in [f for f in rr["family"].unique() if f != "ACTRN"]:
-            entry = {}
-            for metric in ("nmae_pct", "decision_regret_pct", "optimal_selection_pct",
-                           "top_decile_selection_pct"):
-                diff = (rep[metric]["ACTRN"] - rep[metric][other]).to_numpy()
-                entry[metric] = {
-                    "mean_actrn": float(rep[metric]["ACTRN"].mean()),
-                    "mean_other": float(rep[metric][other].mean()),
-                    "mean_diff": float(diff.mean()),
-                    "repeats_actrn_lower": int(np.sum(diff < 0)),
-                    "wilcoxon_exact_p": (float(stats.wilcoxon(diff, method="exact").pvalue)
-                                         if np.any(diff != 0) else 1.0),
-                }
-            d = (ctx["ACTRN"] - ctx[other]).dropna()
-            boot = []
-            groups = [d.xs(r, level="repeat").to_numpy() for r in sorted(d.index.unique("repeat"))]
-            for _ in range(BOOTSTRAP_DRAWS):
-                boot.append(np.mean(np.concatenate(
-                    [g[rng.integers(0, len(g), len(g))] for g in groups])))
-            entry["context_regret_pct"] = {
-                "n": int(len(d)), "actrn_better": int((d < 0).sum()),
-                "other_better": int((d > 0).sum()), "ties": int((d == 0).sum()),
-                "mean_diff": float(d.mean()),
-                "bootstrap95": [float(np.quantile(boot, 0.025)), float(np.quantile(boot, 0.975))],
-                "wilcoxon_p": (float(stats.wilcoxon(d.to_numpy()).pvalue)
-                               if np.any(d.to_numpy() != 0) else 1.0),
-            }
-            out[other] = entry
-        result[response] = out
+        result[response] = {}
+        for subset, repeats in subsets.items():
+            if not repeats or (subset != "all" and len(repeats) == len(present)):
+                continue
+            r_sub = rr[rr["repeat"].isin(repeats)]
+            ctx = dd[dd["repeat"].isin(repeats)].pivot_table(
+                index=["repeat", "reservoir_id", "decision_age"], columns="family",
+                values="decision_regret_pct")
+            rep = r_sub.pivot(index="repeat", columns="family")
+            result[response][subset] = {
+                other: _compare(rep, ctx, other, rng)
+                for other in r_sub["family"].unique() if other != "ACTRN"}
     return result
 
 
@@ -352,16 +383,18 @@ def benchmark_specs(repeats, responses, families, grid_limit):
     return specs
 
 
-def run_benchmark(out_dir, workers, repeats, grid_limit, responses):
-    families = (["ACTRN"] + list(BASELINES) + [f"{b} (engineered)" for b in BASELINES])
-    results = run_parallel(benchmark_job, benchmark_specs(repeats, responses, families,
-                                                          grid_limit), workers)
+def run_benchmark(out_dir, workers, repeats, grid_limit, responses, seed_base):
+    specs = benchmark_specs(repeats, responses, FAMILIES, grid_limit)
+    for spec in specs:
+        spec["seed_base"] = seed_base
+    results = run_parallel(benchmark_job, specs, workers)
     tuning = pd.DataFrame([r["row"] for r in results])
     selected = select_best(tuning, ["repeat", "response", "family"])
     # ablations reuse the full ACTRN configuration selected in the same repeat
     full = selected[(selected["family"] == "ACTRN") & (selected["response"] == "exp")]
     abl_specs = [{"repeat": int(r.repeat), "response": "exp", "family": name,
-                  "config_id": int(r.config_id), "params": json.loads(r.params)}
+                  "config_id": int(r.config_id), "params": json.loads(r.params),
+                  "seed_base": seed_base}
                  for r in full.itertuples() for name in ABLATIONS]
     abl = run_parallel(benchmark_job, abl_specs, workers)
     results += abl
@@ -397,8 +430,8 @@ def run_field(out_dir, workers, grid_limit, folds):
             continue
         start = end - FIELD_TEST
         persistence.append(field_persistence(fold, start, end))
-        for family in ("ACTRN",) + BASELINES:
-            for cid, params in enumerate(GRIDS["field"][family][:grid_limit]):
+        for family in FAMILIES:
+            for cid, params in enumerate(GRIDS["field"][family_kind(family)[0]][:grid_limit]):
                 specs.append({"fold": fold, "family": family, "config_id": cid, "params": params,
                               "test_start": start, "test_end": end})
     c = int(np.flatnonzero(level >= CASE_LEVEL_M3)[-1])
@@ -432,31 +465,38 @@ def environment() -> dict:
                            capture_output=True, text=True).stdout.strip()
     return {"python": platform.python_version(),
             "packages": {p: metadata.version(p) for p in pkgs},
-            "git_commit": commit, "code_dirty": bool(dirty)}
+            "git_commit": commit, "code_dirty": bool(dirty),
+            "code_dirty_paths": dirty.splitlines()}
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--out", default=str(ROOT / "data" / "processed" / "actrn_v2"))
-    ap.add_argument("--workers", type=int, default=24)
+    ap.add_argument("--out", default=str(ROOT / "data" / "processed" / "actrn_v3"))
+    ap.add_argument("--workers", type=int, default=40)
     ap.add_argument("--quick", action="store_true",
                     help="smoke run: 1 repeat, 2 configs, exp response, fold 0")
+    ap.add_argument("--dev", action="store_true",
+                    help="benchmark on the development draws only (no field run)")
     args = ap.parse_args()
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     quick = args.quick
     t0 = time.perf_counter()
-    bench = run_benchmark(out_dir, args.workers, repeats=[0] if quick else range(5),
+    seed_base = DEV_SEED_BASE if args.dev else DATA_SEED_BASE
+    bench = run_benchmark(out_dir, args.workers,
+                          repeats=[0] if quick else REGISTERED_REPEATS + FRESH_REPEATS,
                           grid_limit=2 if quick else 8,
-                          responses=["exp"] if quick else ["exp", "hill"])
-    field = run_field(out_dir, args.workers, grid_limit=2 if quick else 8,
-                      folds={0} if quick else {0, 1, 2, 3})
+                          responses=["exp"] if quick else ["exp", "hill"], seed_base=seed_base)
+    field = None if args.dev else run_field(out_dir, args.workers, grid_limit=2 if quick else 8,
+                                            folds={0} if quick else {0, 1, 2, 3})
     files = sorted(p for p in out_dir.glob("*") if p.is_file() and p.name != "manifest.json")
     manifest = {
         "protocol": str(PROTOCOL.relative_to(ROOT)), "protocol_sha256": _sha256(PROTOCOL),
-        "quick": quick, "environment": environment(), "workers": args.workers,
+        "quick": quick, "dev_seeds": args.dev, "environment": environment(),
+        "workers": args.workers,
         "wall_seconds": time.perf_counter() - t0, "benchmark": bench, "field": field,
-        "seeds": {"data": "20260716 + 1009*repeat", "model": "42 + repeat",
+        "seeds": {"data": f"{seed_base} + 1009*repeat", "model": "42 + repeat",
+                  "ensemble_members": "model seed + 1000*k, k = 0..4",
                   "decision_candidates": "data_seed + 1776", "field_model": "242 + fold",
                   "field_case_model": 747, "bootstrap": BOOTSTRAP_SEED},
         "outputs": {p.name: _sha256(p) for p in files},

@@ -1,0 +1,81 @@
+{
+  "protocol": "_wiki-methodology/_top/_decisions/_0003-actrn-v3-protocol.md",
+  "protocol_sha256": "56b5f2ecb8a5ea29dbdb1845d2227f85a7460c915bc7dc47288aa150b67b57b4",
+  "quick": false,
+  "dev_seeds": false,
+  "environment": {
+    "python": "3.11.15",
+    "packages": {
+      "numpy": "2.4.6",
+      "pandas": "3.0.6",
+      "scikit-learn": "1.9.1",
+      "scipy": "1.17.1",
+      "pyarrow": "26.0.0"
+    },
+    "git_commit": "a854e0122d21cd4862296a94ee3ed27cee5f8434",
+    "code_dirty": true,
+    "code_dirty_paths": [
+      "D code/render_figures_tnr.py"
+    ]
+  },
+  "workers": 40,
+  "wall_seconds": 717.977846029913,
+  "benchmark": {
+    "jobs": 1500,
+    "fit_seconds_total": 21458.59788926714
+  },
+  "field": {
+    "jobs": 296,
+    "case": {
+      "case_decision_date": "2015-05-24",
+      "case_index": 361,
+      "case_level_m3": 20787.54,
+      "latest_candidate_block": "2015-03-29",
+      "budget_m3": 603918.083755,
+      "library_size": 52,
+      "selected_source_block": "2009-04-12",
+      "selected_predicted_cumulative_m3": 207148.62089829572,
+      "candidate_predicted_cumulative_range_m3": [
+        130295.14226557323,
+        207148.62089829572
+      ],
+      "candidates_with_any_clipped_step": 0,
+      "implemented_schedule_total_m3": 528094.58032625,
+      "implemented_predicted_cumulative_m3": 175906.89487148967,
+      "implemented_observed_cumulative_m3": 149564.87,
+      "clip_bounds_m3": [
+        0.0,
+        62641.81
+      ],
+      "case_params": {
+        "latent_dim": 8,
+        "learning_rate": 0.0005,
+        "l2": 0.1
+      }
+    }
+  },
+  "seeds": {
+    "data": "20260716 + 1009*repeat",
+    "model": "42 + repeat",
+    "ensemble_members": "model seed + 1000*k, k = 0..4",
+    "decision_candidates": "data_seed + 1776",
+    "field_model": "242 + fold",
+    "field_case_model": 747,
+    "bootstrap": 20261016
+  },
+  "outputs": {
+    "benchmark_decisions.csv": "3904c16692114780ff39a9c84ffc32a915856272bc68f3bfdff4db6b239ddaa9",
+    "benchmark_runs.csv": "6bb48ee58fdca20428f2fa0bd20cf79f81cbccdd570e7e20b4b2d8949a6fb908",
+    "benchmark_stats.json": "f0bf05f95f141bafa6140474032230d87f1ea8c56b4a8332d4082be1c50288ad",
+    "benchmark_summary.csv": "d0d7991660e1f3381680a2e72b16e3b0ac301ac7ebc492b00c07f1529469e5cb",
+    "benchmark_tuning.csv": "547f5b3c4ffa4d5f2f235fcf562ba8dea3350c326b75db84fb86e558763120db",
+    "field_case_backtest.csv": "a08230d280b5c6cc6eaad0be8192432b6c51401e12b2bd5f1421c7f23d8f3a23",
+    "field_case_candidates.csv": "df6a6915664a82b192b0dc67c6bb52df62a62726d4a4ebe177bd44826f9c8d68",
+    "field_case_decision.csv": "356065be8c7362d527bfaf603d98eee2f8c018ae00e271c508a5ccb4e0f1a434",
+    "field_case_summary.json": "3841fd92f4a2514aada933a26c961bfcdad3b97c5ba29bcfcafa3fb9ed907840",
+    "field_rolling_metrics.csv": "4ceed6f492a25c09769c5797c0a72cd1739fcf973c8cf7f190156b8e0a18678c",
+    "field_summary.csv": "df1804dc0fe084d9fad8c936d0e1ef9aad95f9484764b37fb191e51fb4105cd3",
+    "field_tuning.csv": "6dd144ce3dad7d2c7a72aac611ad375b69481aad69612313b0eef4ff77043f1b"
+  },
+  "command": "python code/actrn_experiments.py --out data/processed/actrn_v3 --workers 40"
+}

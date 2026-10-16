@@ -1,4 +1,4 @@
-"""Write the manuscript tables and an in-text number sheet from the registered v2 results.
+"""Write the manuscript tables and an in-text number sheet from the registered v3 results.
 
 Usage (from the project root):
     .venv/bin/python code/make_actrn_tables.py
@@ -14,16 +14,20 @@ from pathlib import Path
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-RES = ROOT / "data" / "processed" / "actrn_v2"
+RES = ROOT / "data" / "processed" / "actrn_v3"
 OUT = ROOT / "paper" / "fuel_2026" / "tables"
 RAW = ["Ridge", "Random forest", "HGB", "MLP"]
 ENG = [f"{m} (engineered)" for m in RAW]
-ABL = ["ACTRN w/o ranking loss", "ACTRN w/o interaction", "ACTRN raw action input"]
+ABL = ["ACTRN w/o contrastive learning", "ACTRN w/o interaction", "ACTRN w/o response proxies",
+       "ACTRN raw action input", "ACTRN linear response", "ACTRN concatenation interaction"]
 NAME = {"Ridge": "Ridge", "Random forest": "Random forest", "HGB": "HGB", "MLP": "MLP",
         "ACTRN": "ACTRN", "Persistence": "Persistence",
-        "ACTRN w/o ranking loss": "ACTRN w/o ranking loss",
-        "ACTRN w/o interaction": "ACTRN w/o interaction $z_I$",
-        "ACTRN raw action input": "ACTRN, raw action input"}
+        "ACTRN w/o contrastive learning": "A1: pooled training (no contrasts)",
+        "ACTRN w/o interaction": "A2: no interaction path $z_I$",
+        "ACTRN w/o response proxies": "A3: no response proxies $\\rho(H_t)$",
+        "ACTRN raw action input": "A4: raw action input $\\operatorname{vec}(U_t)$",
+        "ACTRN linear response": "A5: linear response $x_U W_A$ only",
+        "ACTRN concatenation interaction": "A6: concatenation MLP instead of $z_H \\odot z_U$"}
 NAME.update({f"{m} (engineered)": f"{m} + ACTRN features" for m in RAW})
 
 
@@ -52,7 +56,6 @@ def main() -> None:
     s = pd.read_csv(RES / "benchmark_summary.csv").set_index(["response", "family"])
     stats = json.loads((RES / "benchmark_stats.json").read_text())
     field = pd.read_csv(RES / "field_rolling_metrics.csv")
-    explo = pd.read_csv(RES / "exploratory_field_engineered_metrics.csv")
     case = json.loads((RES / "field_case_summary.json").read_text())
 
     def row(resp, fam, cols):
@@ -69,14 +72,14 @@ def main() -> None:
                 [row("exp", f, pred_cols) for f in ENG] + ["\\midrule"] + [row("exp", "ACTRN", pred_cols)]
     (OUT / "tab_prediction.tex").write_text(table(
         pred_rows, ["Model", "NMAE (\\%)", "NRMSE (\\%)", "$R^2$"], pred_cols,
-        "Known-truth trajectory prediction on the group-held-out test reservoirs (mean $\\pm$ standard deviation over five repeats). Models marked ``+ ACTRN features'' receive the same history and action representation as ACTRN.",
+        "Known-truth trajectory prediction on the group-held-out test reservoirs (mean $\\pm$ standard deviation over ten repeats). Models marked ``+ ACTRN features'' receive the same history and action representation $[x_H, x_U]$ as ACTRN.",
         "tab:prediction-summary", "lrrr"))
     dec_rows = [row("exp", f, dec_cols) for f in RAW] + ["\\midrule"] + \
                [row("exp", f, dec_cols) for f in ENG] + ["\\midrule"] + [row("exp", "ACTRN", dec_cols)]
     (OUT / "tab_decision.tex").write_text(table(
         dec_rows, ["Model", "Regret (\\%)", "Exact optimum (\\%)", "Top decile (\\%)"],
         dec_cols,
-        "Known-truth schedule selection over 160 decision contexts with 80 equal-budget candidates each (mean $\\pm$ standard deviation over five repeats). Regret is the relative shortfall of the selected candidate's true cumulative oil from the best candidate, as a percentage of the best.",
+        "Known-truth schedule selection over 320 decision contexts with 80 equal-budget candidates each (mean $\\pm$ standard deviation over ten repeats). Regret is the relative shortfall of the selected candidate's true cumulative oil from the best candidate, as a percentage of the best.",
         "tab:known-truth", "lrrr"))
     abl_rows = [row("exp", f, pred_cols[:1] + dec_cols[:2]) for f in ["ACTRN"] + ABL]
     abl_rows += ["\\midrule", "\\multicolumn{4}{l}{\\emph{Alternative saturation benchmark}} \\\\"]
@@ -84,21 +87,17 @@ def main() -> None:
                  ["HGB", "HGB (engineered)", "Ridge (engineered)", "ACTRN"]]
     (OUT / "tab_ablation.tex").write_text(table(
         abl_rows, ["Model", "NMAE (\\%)", "Regret (\\%)", "Exact optimum (\\%)"], None,
-        "Component ablations of ACTRN on the known-truth benchmark and results on the alternative saturation benchmark (mean $\\pm$ standard deviation over five repeats; regret is relative regret). Each ablation reuses the configuration selected for the full model in the same repeat.",
+        "Component ablations of ACTRN on the known-truth benchmark and results on the alternative saturation benchmark (mean $\\pm$ standard deviation over ten repeats; regret is relative regret). Each ablation changes one component and reuses the configuration selected for the full model in the same repeat.",
         "tab:ablation", "lrrr"))
     fp = field.pivot(index="family", columns="fold", values="nmae_pct")
     fsum = field.groupby("family")[["nmae_pct", "nrmse_pct", "r2"]].mean()
-    order = ["Persistence", "Ridge", "Random forest", "HGB", "MLP", "ACTRN"]
     frows = []
-    for f in order:
-        frows.append(" & ".join([NAME[f]] + [f"{fp.loc[f, k]:.1f}" for k in range(4)] +
-                                [f"{fsum.loc[f, 'nmae_pct']:.1f}", f"${fsum.loc[f, 'r2']:.2f}$"]))
-    ep = explo.pivot(index="family", columns="fold", values="nmae_pct")
-    esum = explo.groupby("family")[["nmae_pct", "r2"]].mean()
-    frows += ["\\midrule", "\\multicolumn{7}{l}{\\emph{Exploratory: baselines with ACTRN features}} \\\\"]
-    for f in ENG:
-        frows.append(" & ".join([NAME[f]] + [f"{ep.loc[f, k]:.1f}" for k in range(4)] +
-                                [f"{esum.loc[f, 'nmae_pct']:.1f}", f"${esum.loc[f, 'r2']:.2f}$"]))
+    for group in (["Persistence"], RAW, ENG, ["ACTRN"]):
+        for f in group:
+            frows.append(" & ".join([NAME[f]] + [f"{fp.loc[f, k]:.1f}" for k in range(4)] +
+                                    [f"{fsum.loc[f, 'nmae_pct']:.1f}", f"${fsum.loc[f, 'r2']:.2f}$"]))
+        frows.append("\\midrule")
+    frows.pop()
     dates = field.drop_duplicates("fold").sort_values("fold")
     origin_note = "; ".join(f"origin {int(r.fold) + 1}: {r.test_start} to {r.test_end}"
                             for r in dates.itertuples())
@@ -106,7 +105,7 @@ def main() -> None:
         frows, ["Model", "O1", "O2", "O3", "O4", "Mean NMAE", "Mean $R^2$"], None,
         "Leakage-free rolling-origin field forecasting on the Volve record: NMAE (\\%) by origin and means over the four origins.",
         "tab:field", "lrrrrrr", wide=True,
-        notes=f"Test blocks of 60 weekly decision windows ({origin_note}). Exploratory rows were added after the registered run."))
+        notes=f"Test blocks of 60 weekly decision windows ({origin_note})."))
 
     st = stats["exp"]
     numbers = {
@@ -119,19 +118,38 @@ def main() -> None:
         "hill": {f: {k: round(float(s.loc[("hill", f), f"{k}_mean"]), 3) for k in
                      ("nmae_pct", "decision_regret_pct", "optimal_selection_pct")}
                  for f in RAW + ENG + ["ACTRN"]},
-        "stats_exp": {o: {"ctx": st[o]["context_regret_pct"],
-                          "nmae_lower": st[o]["nmae_pct"]["repeats_actrn_lower"],
-                          "regret_lower": st[o]["decision_regret_pct"]["repeats_actrn_lower"]}
-                      for o in st},
-        "stats_hill": {o: stats["hill"][o]["context_regret_pct"] for o in stats["hill"]},
+        "stats_exp": {sub: {o: {"ctx": st[sub][o]["context_regret_pct"],
+                                "regret": st[sub][o]["decision_regret_pct"],
+                                "nmae": st[sub][o]["nmae_pct"]}
+                            for o in st[sub]} for sub in st},
+        "stats_hill": {sub: {o: {"ctx": stats["hill"][sub][o]["context_regret_pct"],
+                                 "regret": stats["hill"][sub][o]["decision_regret_pct"]}
+                             for o in stats["hill"][sub]} for sub in stats["hill"]},
         "field_mean": fsum.round(3).to_dict(orient="index"),
         "field_by_fold_nmae": fp.round(2).to_dict(orient="index"),
-        "field_exploratory_mean": esum.round(3).to_dict(orient="index"),
         "field_case": case,
+        "within_context_variance_share": within_context_share(),
     }
     (OUT / "numbers.json").write_text(json.dumps(numbers, indent=2) + "\n")
     print(json.dumps({k: numbers[k] for k in ("actrn", "field_mean")}, indent=1))
 
+
+
+def within_context_share() -> dict:
+    """Share of the variance of cumulative training oil that lies between schedules of one state."""
+    import sys
+    import numpy as np
+    sys.path.insert(0, str(ROOT / "code"))
+    from actrn_experiments import FRESH_REPEATS, REGISTERED_REPEATS, benchmark_data
+
+    shares = []
+    for r in REGISTERED_REPEATS + FRESH_REPEATS:
+        _, _, _, y, context_ids, split, _ = benchmark_data(r, "exp")
+        value = y[split["train"]].sum(axis=1)
+        _, inv = np.unique(context_ids[split["train"]], return_inverse=True)
+        means = np.bincount(inv, weights=value) / np.bincount(inv)
+        shares.append(float(np.mean((value - means[inv]) ** 2) / np.var(value)))
+    return {"mean": float(np.mean(shares)), "min": float(min(shares)), "max": float(max(shares))}
 
 
 # ----------------------------------------------------------------- supplementary tables
@@ -179,24 +197,26 @@ def supplementary() -> None:
             return "; ".join(parts)
         lines.append(f"{model} & {axes(GRIDS['benchmark'][model])} & {axes(GRIDS['field'][model])} \\\\")
     lines += ["\\bottomrule", "\\end{longtable}",
-              "\\noindent Fixed settings: ACTRN benchmark fusion dimension = latent + 16, 900 epochs, "
-              "patience 80, ranking weight 3, batch 128; ACTRN field fusion dimension = 1.5 $\\times$ latent, "
-              "1200 epochs, patience 100, no ranking term; random forest 240 trees with maximum feature "
+              "\\noindent Fixed settings: ACTRN ensemble of five initialisation seeds; benchmark 900 epochs, "
+              "patience 80, mini-batches of 21 states, ridge penalties $\\{0.01, 0.1, 1, 10\\}$ for $W_A$ "
+              "(within-state validation loss) and $\\{0.1, 0.3, 1, 3, 10, 30, 100, 300, 1000\\}$ for $W_B$ "
+              "(validation NMAE); field 1200 epochs, patience 100, mini-batches of 128 windows and joint ridge "
+              "penalties $\\{1, 3, 10, 30, 100, 300, 1000, 3000\\}$; random forest 240 trees with maximum feature "
               "fraction 0.8; HGB 180 iterations with $\\ell_2$ regularisation 1.0; MLP at most 700 iterations "
               "with early stopping on 15\\% of the training data and patience 35.\n"]
     (OUT / "supp_grids.tex").write_text("\n".join(lines) + "\n")
 
     runs = pd.read_csv(RES / "benchmark_runs.csv")
-    rows = ["\\begin{longtable}{llllrr}",
+    rows = ["\\begin{longtable}{p{0.31\\linewidth}rp{0.28\\linewidth}rr}",
             "\\caption{Configurations selected per repeat and test results on the main benchmark.}"
             "\\label{tab:s-repeats}\\\\", "\\toprule",
-            "Model & Repeat & \\multicolumn{2}{l}{Selected configuration} & NMAE (\\%) & Regret (\\%) \\\\",
+            "Model & Repeat & Selected configuration & NMAE (\\%) & Regret (\\%) \\\\",
             "\\midrule",
             "\\endhead"]
     for fam in ["ACTRN"] + ABL + RAW + ENG:
         sub = runs[(runs.response == "exp") & (runs.family == fam)].sort_values("repeat")
         for r in sub.itertuples():
-            rows.append(f"{NAME[fam]} & {r.repeat + 1} & \\multicolumn{{2}}{{l}}{{{_fmt_params(json.loads(r.params))}}} & "
+            rows.append(f"{NAME[fam]} & {r.repeat + 1} & {_fmt_params(json.loads(r.params))} & "
                         f"{r.nmae_pct:.2f} & {r.decision_regret_pct:.2f} \\\\")
         rows.append("\\midrule")
     rows[-1] = "\\bottomrule"
@@ -204,11 +224,11 @@ def supplementary() -> None:
     (OUT / "supp_repeats.tex").write_text("\n".join(rows) + "\n")
 
     field = pd.read_csv(RES / "field_rolling_metrics.csv")
-    rows = ["\\begin{longtable}{llrrrl}",
+    rows = ["\\begin{longtable}{p{0.24\\linewidth}rrrrp{0.29\\linewidth}}",
             "\\caption{Field configurations selected per origin and test metrics.}\\label{tab:s-field}\\\\",
             "\\toprule", "Model & Origin & NMAE (\\%) & NRMSE (\\%) & $R^2$ & Selected configuration \\\\",
             "\\midrule", "\\endhead"]
-    for fam in ["Persistence", "Ridge", "Random forest", "HGB", "MLP", "ACTRN"]:
+    for fam in ["Persistence"] + RAW + ENG + ["ACTRN"]:
         for r in field[field.family == fam].sort_values("fold").itertuples():
             cfg = _fmt_params(json.loads(r.params)) if r.params != "{}" else "--"
             rows.append(f"{NAME[fam]} & {int(r.fold) + 1} & {r.nmae_pct:.1f} & {r.nrmse_pct:.1f} & "
