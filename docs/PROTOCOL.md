@@ -57,3 +57,46 @@ seeds, timings and output hashes). Results of earlier model designs and protocol
 - Decision example: latest window with four-week median field oil of at least 20,000 m3;
   candidates are historical injection blocks that end before the decision date, within 5% of the
   median total of the latest 52 such blocks, rescaled to that total.
+
+## Extension: deep sequence baselines and hyperparameter sensitivity (fixed 16 October 2026)
+
+Run once by `code/actrn_extension.py` on the same repeats (r = 10-29), settings and seeds; no model
+of the registered run is refitted, and the ACTRN rows of the statistics are the registered results.
+
+- Deep sequence baselines: Elman RNN, LSTM, Transformer encoder, Autoformer (series decomposition
+  and auto-correlation, encoder-decoder) and Reformer (reformer-pytorch 1.4.4). RNN, LSTM,
+  Transformer and Reformer read 18 time steps (10 history steps with all channels, 8 future steps
+  with the injection rates, a future flag and zeros for the other channels) and predict from the
+  last 8 steps; Autoformer encodes the history, receives the injection rates as known covariates
+  and starts its decoder from the latest 5 oil steps.
+- Training: mean squared error, Adam (weight decay 1e-4), mini-batches of 128, at most 300 epochs,
+  early stopping after 30 epochs without validation improvement, best weights restored; one CPU
+  thread per job.
+- Grids (eight configurations each): benchmark d_model {32, 64} x lr {1e-3, 3e-3} x dropout
+  {0, 0.1}; field d_model {16, 32} x lr {1e-3, 3e-3} x dropout {0.1, 0.3}. The same nine-candidate
+  menu and selection rules as all other families.
+- ACTRN sensitivity, one hyperparameter at a time around the default (latent 16, learning rate
+  0.002, l2 1e-3, five seeds): latent {4, 8, 16, 32, 64}; l2 {1e-5, 1e-4, 1e-3, 1e-2, 1e-1};
+  ensemble {1, 2, 5, 10}; learning rate {5e-4, 1e-3, 2e-3, 5e-3}; base/exp and channelised/exp,
+  all 20 repeats, described without selection.
+- Statistics against ACTRN as for the registered run.
+
+## Amendment: Autoformer correction (fixed 16 October 2026)
+
+A code review after the extension run found that the first Autoformer implementation selected the
+auto-correlation delays from the mean over the whole batch also in evaluation, so that a
+prediction depended on the other examples evaluated with it. The corrected implementation follows
+the official code (github.com/thuml/Autoformer): delays shared across the mini-batch in training
+and selected per example in evaluation, seasonal layer normalisation in encoder and decoder,
+decomposition of the full oil history before taking the decoder start, bias-free 1x1-convolution
+feed-forward layers with GELU, and bias-free circular token embedding plus covariate embedding.
+Kept adaptations: moving-average kernel 5, a one-channel target decoder (the official model
+decodes all variables and keeps the target afterwards), injection rates in place of calendar
+features, default initialisation of the token convolution. Grids, training, candidate menu, selection rules, settings, repeats, seeds and
+the field protocol are unchanged. Only Autoformer is rerun, once
+(`code/actrn_extension.py --kinds Autoformer --skip-sensitivity`), into
+`data/processed/actrn_v4_ext_autoformer/`; its rows supersede the Autoformer rows of
+`data/processed/actrn_v4_ext/`, which are kept as provenance. Reformer keeps the reference
+behaviour of reformer-pytorch, which draws new hash rotations at every forward pass.
+Mean-squared-error reductions are reported as the mean over repeats (or field origins) of RMSE
+squared.

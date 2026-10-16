@@ -1,0 +1,10 @@
+{
+  "wall_seconds": 2365.9320203778334,
+  "jobs": {
+    "sequence": 60,
+    "sensitivity": 0,
+    "field": {
+      "jobs": 4
+    }
+  }
+}

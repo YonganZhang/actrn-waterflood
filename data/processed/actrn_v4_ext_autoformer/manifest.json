@@ -1,0 +1,76 @@
+{
+  "protocol": "_wiki-methodology/_top/_decisions/_0006-actrn-autoformer-correction.md",
+  "protocol_sha256": "b10be4fd1435f1b2555bd1f57021348de7fca812c31942186fe682f4fddcf16a",
+  "kinds": [
+    "Autoformer"
+  ],
+  "quick": false,
+  "environment": {
+    "python": "3.11.15",
+    "packages": {
+      "numpy": "2.4.6",
+      "pandas": "3.0.6",
+      "scikit-learn": "1.9.1",
+      "scipy": "1.17.1",
+      "pyarrow": "26.0.0"
+    },
+    "git_commit": "1907d1e1e8f14ac929ec671ef5d20c22f0bd9ba3",
+    "code_dirty": true,
+    "code_dirty_paths": [
+      "M code/make_actrn_tables.py",
+      " M code/release/PROTOCOL.md",
+      " M code/release/README_public.md",
+      " M code/release/README_results_ext.md",
+      " M code/release/build_release.sh",
+      " M code/render_actrn_figures.py",
+      " D code/render_figures_tnr.py"
+    ]
+  },
+  "workers": 44,
+  "wall_seconds": 2365.9320203778334,
+  "jobs": {
+    "sequence": 60,
+    "sensitivity": 0,
+    "field": {
+      "jobs": 4
+    }
+  },
+  "seeds": {
+    "data": "20260716 + 1009*repeat",
+    "repeats": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29
+    ],
+    "model": "42 + repeat",
+    "bootstrap": 20261016
+  },
+  "outputs": {
+    "sequence_decisions.csv": "26e5177d10deb76dba7d2555f5c028c970a24c30fcaddba56b495ee7c2699c29",
+    "sequence_field_metrics.csv": "013bee74f91a61def86eb62b6598739e6a05d1656460c571449a9a7a7f1f31f2",
+    "sequence_field_tuning.csv": "896e652ac01402b327fedb5968b801b22de4b7f889c24a05b9cd5edc81012824",
+    "sequence_runs.csv": "d24e55aea89effe7a83e39c58b6b2f8fe17cbe28a04fa94b68d6917b996d82ba",
+    "sequence_stats.json": "afa617a39c559b48b56d30b9c740fdd8fa758171e6238e2c3e26ddad57fb9d3f",
+    "sequence_summary.csv": "549839978c799099aef712b71f8cc95597e54f4b6df9f0a5a4ae5b1bec988e67",
+    "sequence_summary_nmae_selection.csv": "8f0bbf147f46cca22f128ed35d7be2fcad4acdda859a8c5e5d107f53b5fdbf50",
+    "sequence_tuning.csv": "cba225e3a61b256690868971f3f756ce04c0cbd8a7f691669e83fc8049901dd6"
+  },
+  "command": "python code/actrn_extension.py --kinds Autoformer --skip-sensitivity --protocol _wiki-methodology/_top/_decisions/_0006-actrn-autoformer-correction.md --out data/processed/actrn_v4_ext_autoformer --workers 44"
+}

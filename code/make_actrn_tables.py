@@ -1,5 +1,9 @@
 """Write the manuscript tables and an in-text number sheet from the registered v4 results.
 
+Deep sequence baselines and the sensitivity runs come from the v4 extension (ADR-0005); the
+Autoformer rows come from its corrected rerun (ADR-0006), which supersedes the Autoformer rows of
+the extension.
+
 Usage (from the project root):
     .venv/bin/python code/make_actrn_tables.py
 
@@ -17,12 +21,16 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 RES = ROOT / "data" / "processed" / "actrn_v4"
+EXT = ROOT / "data" / "processed" / "actrn_v4_ext"
+AUTOFORMER = ROOT / "data" / "processed" / "actrn_v4_ext_autoformer"
 OUT = ROOT / "paper" / "fuel_2026" / "tables"
 sys.path.insert(0, str(ROOT / "code"))
 
 RAW = ["Ridge", "Random forest", "HGB", "MLP"]
+SEQ = ["RNN", "LSTM", "Transformer", "Autoformer", "Reformer"]
 ENG = [f"{m} (engineered)" for m in RAW]
-FAMILIES = RAW + ENG + ["ACTRN"]
+FAMILIES = RAW + SEQ + ENG + ["ACTRN"]
+BASELINES = RAW + SEQ + ENG
 ABL = ["ACTRN w/o contrastive learning", "ACTRN w/o interaction", "ACTRN w/o response proxies",
        "ACTRN correlation proxies only", "ACTRN raw action input", "ACTRN linear response",
        "ACTRN concatenation interaction"]
@@ -37,7 +45,10 @@ NAME = {"Ridge": "Ridge", "Random forest": "Random forest", "HGB": "HGB", "MLP":
         "ACTRN linear response": "A5: linear response $x_U W_A$ only",
         "ACTRN concatenation interaction": "A6: concatenation layer instead of $z_H \\odot z_U$"}
 NAME.update({f"{m} (engineered)": f"{m} + ACTRN features" for m in RAW})
-SHORT = {"Ridge": "Ridge", "Random forest": "RF", "HGB": "HGB", "MLP": "MLP", "ACTRN": "ACTRN"}
+NAME.update({m: m for m in SEQ})
+SHORT = {"Ridge": "Ridge", "Random forest": "RF", "HGB": "HGB", "MLP": "MLP", "ACTRN": "ACTRN",
+         "RNN": "RNN", "LSTM": "LSTM", "Transformer": "Transf.", "Autoformer": "Autof.",
+         "Reformer": "Reform."}
 SHORT.update({f"{m} (engineered)": f"{SHORT[m]}+F" for m in RAW})
 LC_NAME = {"ACTRN": "ACTRN", "ACTRN linear response": "A5 linear",
            "Ridge (engineered)": "Ridge+F", "HGB (engineered)": "HGB+F"}
@@ -58,7 +69,9 @@ def table(rows, header, caption, label, spec, wide=False, notes=None, pre=None):
              f"\\begin{{tabular}}{{{spec}}}", "\\toprule"] + (pre or []) + \
             [" & ".join(header) + " \\\\", "\\midrule"]
     for r in rows:
-        lines.append(r if r.startswith("\\") else r + " \\\\")
+        raw = r.rstrip().endswith("\\\\") or r.strip() in ("\\midrule", "\\toprule") \
+            or r.startswith("\\cmidrule")
+        lines.append(r if raw else r + " \\\\")
     lines += ["\\bottomrule", "\\end{tabular}", "\\end{adjustbox}"]
     if notes:
         lines.append(f"\\par\\smallskip\\parbox{{\\linewidth}}{{\\scriptsize {notes}}}")
@@ -66,17 +79,41 @@ def table(rows, header, caption, label, spec, wide=False, notes=None, pre=None):
     return "\n".join(lines) + "\n"
 
 
+def read_ext(name: str) -> pd.DataFrame:
+    """Extension CSV with the Autoformer rows replaced by the corrected rerun (ADR-0006)."""
+    ext = pd.read_csv(EXT / name)
+    return pd.concat([ext[ext.family != "Autoformer"], pd.read_csv(AUTOFORMER / name)],
+                     ignore_index=True)
+
+
+def read_ext_stats() -> dict:
+    """Paired statistics of ACTRN against the sequence models, Autoformer from ADR-0006."""
+    stats = json.loads((EXT / "sequence_stats.json").read_text())
+    for setting, entries in json.loads((AUTOFORMER / "sequence_stats.json").read_text()).items():
+        stats[setting].update(entries)
+    return stats
+
+
 def load():
-    s = pd.read_csv(RES / "benchmark_summary.csv").set_index(["population", "response", "family"])
+    idx = ["population", "response", "family"]
+    both = lambda name, ext: pd.concat([pd.read_csv(RES / name), read_ext(ext)],  # noqa: E731
+                                       ignore_index=True)
+    stats = json.loads((RES / "benchmark_stats.json").read_text())
+    for setting, entries in read_ext_stats().items():
+        stats[setting].update(entries)
+    field = pd.read_csv(RES / "field_rolling_metrics.csv")
+    seq_field = read_ext("sequence_field_metrics.csv").merge(
+        field[["fold", "test_start", "test_end"]].drop_duplicates("fold"), on="fold")
     return {
-        "summary": s,
-        "nmae_sel": pd.read_csv(RES / "benchmark_summary_nmae_selection.csv").set_index(
-            ["population", "response", "family"]),
-        "stats": json.loads((RES / "benchmark_stats.json").read_text()),
+        "summary": both("benchmark_summary.csv", "sequence_summary.csv").set_index(idx),
+        "nmae_sel": both("benchmark_summary_nmae_selection.csv",
+                         "sequence_summary_nmae_selection.csv").set_index(idx),
+        "stats": stats,
         "dependence": pd.read_csv(RES / "benchmark_state_dependence.csv"),
         "curve": pd.read_csv(RES / "benchmark_learning_curve.csv"),
-        "runs": pd.read_csv(RES / "benchmark_runs.csv"),
-        "field": pd.read_csv(RES / "field_rolling_metrics.csv"),
+        "runs": both("benchmark_runs.csv", "sequence_runs.csv"),
+        "sensitivity": pd.read_csv(EXT / "sensitivity_hyperparameters.csv"),
+        "field": pd.concat([field, seq_field], ignore_index=True),
         "case": json.loads((RES / "field_case_summary.json").read_text()),
     }
 
@@ -91,6 +128,29 @@ def dependence_reference(dep, population, response):
             "blind_capture": (rep.capture.mean(), rep.capture.std())}
 
 
+METRICS = [("nmae_pct", 2, "low"), ("nrmse_pct", 2, "low"), ("r2", 3, "high"),
+           ("decision_regret_pct", 2, "low"), ("gain_capture_pct", 1, "high"),
+           ("optimal_selection_pct", 1, "high")]
+
+
+def improvement(s, setting, group):
+    """ACTRN relative to the best model of ``group`` on each metric: % reduction for errors,
+    percentage-point gain for scores."""
+    out = {}
+    for col, _, direction in METRICS:
+        values = s.loc[SETTINGS[setting]].loc[group, f"{col}_mean"]
+        actrn = s.loc[SETTINGS[setting] + ("ACTRN",), f"{col}_mean"]
+        if direction == "low":
+            ref = values.min()
+            out[col] = {"best": values.idxmin(), "value": float(ref),
+                        "change": float(100 * (1 - actrn / ref)), "unit": "%"}
+        else:
+            ref = values.max()
+            out[col] = {"best": values.idxmax(), "value": float(ref),
+                        "change": float(actrn - ref), "unit": "" if col == "r2" else "pt"}
+    return out
+
+
 def main_tables(R) -> dict:
     s = R["summary"]
 
@@ -98,42 +158,45 @@ def main_tables(R) -> dict:
         key = SETTINGS[setting] + (fam,)
         return ms(s.loc[key, f"{col}_mean"], s.loc[key, f"{col}_std"], d)
 
-    pred_cols = [("nmae_pct", 2), ("nrmse_pct", 2), ("r2", 3)]
-    rows = []
-    for group in (RAW, ENG, ["ACTRN"]):
-        rows += [" & ".join([NAME[f]] + [cell("base", f, c, d) for c, d in pred_cols])
-                 for f in group] + ["\\midrule"]
-    (OUT / "tab_prediction.tex").write_text(table(
-        rows[:-1], ["Model", "NMAE (\\%)", "NRMSE (\\%)", "$R^2$"],
-        "Known-truth trajectory prediction on the group-held-out test reservoirs of the base "
-        "population (mean $\\pm$ standard deviation over 20 repeats). Models marked ``+ ACTRN "
-        "features'' receive the same history and action representation $[x_H, x_U]$ as ACTRN.",
-        "tab:prediction-summary", "lrrr"))
-
-    dec_cols = [("decision_regret_pct", 2), ("gain_capture_pct", 1), ("optimal_selection_pct", 1)]
-    rows = []
-    for group in (RAW, ENG, ["ACTRN"]):
-        rows += [" & ".join([NAME[f]] + [cell(st, f, c, d) for st in ("base", "channel")
-                                         for c, d in dec_cols]) for f in group] + ["\\midrule"]
     refs = {st: dependence_reference(R["dependence"], *SETTINGS[st]) for st in ("base", "channel")}
-    rows.append("\\multicolumn{7}{l}{\\emph{Model-free references}} \\\\")
-    rows.append(" & ".join(["Random candidate"] + sum(
-        ([ms(*refs[st]["random_regret"], 2), "$0$", "$1.3$"] for st in ("base", "channel")), [])))
-    rows.append(" & ".join(["State-blind reference ranking"] + sum(
-        ([ms(*refs[st]["blind_regret"], 2), ms(*refs[st]["blind_capture"], 1), "--"]
-         for st in ("base", "channel")), [])))
-    (OUT / "tab_decision.tex").write_text(table(
-        rows, ["Model", "Regret (\\%)", "Gain capture (\\%)", "Exact optimum (\\%)",
-               "Regret (\\%)", "Gain capture (\\%)", "Exact optimum (\\%)"],
-        "Known-truth schedule selection over 640 decision contexts per population, each with 80 "
-        "equal-budget candidates (mean $\\pm$ standard deviation over 20 repeats). Regret is the "
-        "shortfall of the selected candidate's true cumulative oil from the best candidate, as a "
-        "percentage of the best; gain capture is the share of the attainable gain over the average "
-        "candidate that the selection realises. The state-blind reference ranks the candidates "
-        "of a state by their mean true value over all other test states of the repeat.",
-        "tab:known-truth", "lrrrrrr", wide=True,
-        pre=["& \\multicolumn{3}{c}{Base population} & \\multicolumn{3}{c}{Channelised population} \\\\",
-             "\\cmidrule(lr){2-4}\\cmidrule(lr){5-7}"]))
+    gains = {}
+    for setting, title in (("base", "base"), ("channel", "channelised")):
+        rows = []
+        for label, group in (("Conventional models", RAW), ("Deep sequence models", SEQ),
+                             ("Conventional models with ACTRN features", ENG)):
+            rows.append(f"\\multicolumn{{7}}{{l}}{{\\emph{{{label}}}}} \\\\")
+            rows += [" & ".join([NAME[f]] + [cell(setting, f, c, d) for c, d, _ in METRICS])
+                     for f in group]
+            rows.append("\\midrule")
+        rows.append(" & ".join(["\\textbf{ACTRN}"] + [cell(setting, "ACTRN", c, d)
+                                                       for c, d, _ in METRICS]))
+        rows.append("\\midrule")
+        gains[setting] = {"vs_conventional_and_deep": improvement(s, setting, RAW + SEQ),
+                          "vs_with_features": improvement(s, setting, ENG),
+                          "vs_all": improvement(s, setting, BASELINES)}
+        for key, label in (("vs_conventional_and_deep", "Gain over best conventional/deep model"),
+                           ("vs_with_features", "Gain over best model with ACTRN features")):
+            g = gains[setting][key]
+            rows.append(" & ".join([f"\\emph{{{label}}}"] + [
+                (f"${g[c]['change']:.1f}\\%$" if u == "low" else
+                 f"${g[c]['change']:+.3f}$" if c == "r2" else
+                 f"${g[c]['change']:+.1f}$") for c, _, u in METRICS]))
+        ref = refs[setting]
+        rows.append("\\midrule")
+        rows.append(" & ".join(["Random candidate", "--", "--", "--",
+                                ms(*ref["random_regret"], 2), "$0$", "$1.3$"]))
+        rows.append(" & ".join(["State-blind reference ranking", "--", "--", "--",
+                                ms(*ref["blind_regret"], 2), ms(*ref["blind_capture"], 1), "--"]))
+        (OUT / f"tab_comparison_{setting}.tex").write_text(table(
+            rows, ["Model", "NMAE (\\%)", "NRMSE (\\%)", "$R^2$", "Regret (\\%)",
+                   "Gain capture (\\%)", "Exact optimum (\\%)"],
+            f"Comparative experiment on the {title} population: trajectory prediction and schedule "
+            "selection over 640 decision contexts with 80 equal-budget candidates each (mean "
+            "$\\pm$ standard deviation over 20 repeats). Gains are reductions in percent for NMAE, "
+            "NRMSE and regret, the difference in $R^2$, and differences in percentage points for "
+            "gain capture and exact-optimum selection. The state-blind reference ranks the candidates of a state by "
+            "their mean true value over all other test states of the repeat.",
+            f"tab:comparison-{setting}", "lrrrrrr", wide=True))
 
     abl_cols = [("nmae_pct", 2), ("decision_regret_pct", 2), ("gain_capture_pct", 1)]
     rows = [" & ".join([NAME[f]] + [cell(st, f, c, d) for st in ("base", "channel")
@@ -142,9 +205,9 @@ def main_tables(R) -> dict:
     (OUT / "tab_ablation.tex").write_text(table(
         rows, ["Model", "NMAE (\\%)", "Regret (\\%)", "Gain capture (\\%)",
                "NMAE (\\%)", "Regret (\\%)", "Gain capture (\\%)"],
-        "Component ablations of ACTRN (mean $\\pm$ standard deviation over 20 repeats). Each "
-        "ablation changes one component and reuses the candidate selected for the full model in "
-        "the same repeat.", "tab:ablation", "lrrrrrr", wide=True,
+        "Ablation experiment (mean $\\pm$ standard deviation over 20 repeats). Each ablation "
+        "changes one component and reuses the candidate selected for the full model in the same "
+        "repeat.", "tab:ablation", "lrrrrrr", wide=True,
         pre=["& \\multicolumn{3}{c}{Base population} & \\multicolumn{3}{c}{Channelised population} \\\\",
              "\\cmidrule(lr){2-4}\\cmidrule(lr){5-7}"]))
 
@@ -152,19 +215,22 @@ def main_tables(R) -> dict:
     fp = field.pivot(index="family", columns="fold", values="nmae_pct")
     fsum = field.groupby("family")[["nmae_pct", "nrmse_pct", "r2"]].mean()
     rows = []
-    for group in (["Persistence"], RAW, ENG, ["ACTRN"]):
+    for group in (["Persistence"], RAW, SEQ, ENG, ["ACTRN"]):
         rows += [" & ".join([NAME[f]] + [f"{fp.loc[f, k]:.1f}" for k in range(4)] +
-                            [f"{fsum.loc[f, 'nmae_pct']:.1f}", f"${fsum.loc[f, 'r2']:.2f}$"])
+                            [f"{fsum.loc[f, 'nmae_pct']:.1f}", f"{fsum.loc[f, 'nrmse_pct']:.1f}",
+                             f"${fsum.loc[f, 'r2']:.2f}$"])
                  for f in group] + ["\\midrule"]
     dates = field.drop_duplicates("fold").sort_values("fold")
     note = "; ".join(f"origin {int(r.fold) + 1}: {r.test_start} to {r.test_end}"
                      for r in dates.itertuples())
     (OUT / "tab_field.tex").write_text(table(
-        rows[:-1], ["Model", "O1", "O2", "O3", "O4", "Mean NMAE", "Mean $R^2$"],
-        "Leakage-free rolling-origin field forecasting on the Volve record: NMAE (\\%) by origin "
-        "and means over the four origins.", "tab:field", "lrrrrrr", wide=True,
+        rows[:-1], ["Model", "O1", "O2", "O3", "O4", "Mean NMAE", "Mean NRMSE", "Mean $R^2$"],
+        "Field case study: leakage-free rolling-origin forecasting on the Volve record, NMAE (\\%) "
+        "by origin and means over the four origins.", "tab:field", "lrrrrrrr", wide=True,
         notes=f"Test blocks of 60 weekly decision windows ({note})."))
-    return {"refs": refs, "field_by_fold": fp, "field_mean": fsum}
+    for stale in ("tab_prediction.tex", "tab_decision.tex"):
+        (OUT / stale).unlink(missing_ok=True)
+    return {"refs": refs, "field_by_fold": fp, "field_mean": fsum, "gains": gains}
 
 
 def numbers(R, extra) -> dict:
@@ -192,8 +258,66 @@ def numbers(R, extra) -> dict:
         "field_by_fold_nmae": extra["field_by_fold"].round(2).to_dict(orient="index"),
         "field_case": R["case"],
         "within_context_variance_share": within_context_share(),
+        "gains": extra["gains"],
+        "mse_gains": mse_gains(R["runs"]),
+        "field_mse_vs_persistence_pct": field_mse_reduction(R["field"]),
+        "sensitivity": sensitivity_summary(R["sensitivity"]),
+        "fit_minutes": {st_: {f: round(v, 2) for f, v in d.items() if f in FAMILIES}
+                        for st_, d in fit_minutes(R["runs"]).items()},
+        "selection_rule": {st_: {"regret_rule": {f: round(float(R["summary"].loc[
+            SETTINGS[st_] + (f,), "decision_regret_pct_mean"]), 4) for f in FAMILIES},
+            "nmae_rule": {f: round(float(R["nmae_sel"].loc[SETTINGS[st_] + (f,),
+                                                            "decision_regret_pct_mean"]), 4)
+                          for f in FAMILIES}} for st_ in SETTINGS},
     }
     (OUT / "numbers.json").write_text(json.dumps(out, indent=2, default=float) + "\n")
+    return out
+
+
+def mse_gains(runs) -> dict:
+    """Reduction of the mean squared error (mean over repeats of the test MSE, RMSE squared)
+    relative to the lowest-MSE model of each baseline group."""
+    out = {}
+    for setting, key in SETTINGS.items():
+        sub = runs[(runs.population == key[0]) & (runs.response == key[1])]
+        mse = (sub.assign(mse=sub.rmse ** 2).groupby("family")["mse"].mean())
+        out[setting] = {}
+        for label, group in (("vs_conventional_and_deep", RAW + SEQ), ("vs_with_features", ENG)):
+            best = mse.loc[group].idxmin()
+            out[setting][label] = {"best": best, "reduction_pct": float(100 * (1 - mse["ACTRN"] / mse[best]))}
+    return out
+
+
+def fit_minutes(runs) -> dict:
+    """Median over repeats of the time to fit all candidates of a family, in minutes."""
+    out = {}
+    for setting in ("base", "channel"):
+        key = SETTINGS[setting]
+        sub = runs[(runs.population == key[0]) & (runs.response == key[1])]
+        out[setting] = (sub.groupby("family")["fit_seconds_all_configs"].median() / 60).to_dict()
+    return out
+
+
+def field_mse_reduction(field) -> float:
+    """Reduction of the field MSE (mean over origins of RMSE squared) of ACTRN against persistence."""
+    mse = field.assign(mse=field.rmse ** 2).groupby("family")["mse"].mean()
+    return float(100 * (1 - mse["ACTRN"] / mse["Persistence"]))
+
+
+SENS_DEFAULT = {"latent_dim": 16, "l2": 1e-3, "ensemble": 5, "learning_rate": 0.002}
+
+
+def sensitivity_summary(sens) -> dict:
+    """One-at-a-time ACTRN sensitivity: mean test regret and NMAE per value of each axis."""
+    out = {}
+    for axis in SENS_DEFAULT:
+        sub = sens
+        for k, v in SENS_DEFAULT.items():
+            if k != axis:
+                sub = sub[np.isclose(sub[f"cfg_{k}"], v)]
+        g = sub.groupby(["population", f"cfg_{axis}"])[["decision_regret_pct", "nmae_pct"]].mean()
+        out[axis] = {pop: {str(v): {m: round(float(g.loc[(pop, v), m]), 4) for m in g.columns}
+                           for v in g.loc[pop].index} for pop in g.index.levels[0]}
     return out
 
 
@@ -219,7 +343,7 @@ def _fmt_params(p) -> str:
     alias = {"latent_dim": "latent", "learning_rate": "lr", "l2": "$\\ell_2$",
              "alpha": "$\\alpha$", "max_depth": "depth", "min_samples_leaf": "min leaf",
              "max_leaf_nodes": "leaf nodes", "hidden_layer_sizes": "hidden",
-             "learning_rate_init": "lr"}
+             "learning_rate_init": "lr", "d_model": "width", "dropout": "dropout"}
     out = []
     for k, v in p.items():
         if isinstance(v, (list, tuple)):
@@ -232,7 +356,9 @@ def _fmt_params(p) -> str:
 
 def _longtable(spec, caption, label, header, body):
     rows = [f"\\begin{{longtable}}{{{spec}}}", f"\\caption{{{caption}}}\\label{{{label}}}\\\\",
-            "\\toprule", header + " \\\\", "\\midrule", "\\endhead"] + body
+            "\\toprule", header + " \\\\", "\\midrule", "\\endfirsthead",
+            "\\caption[]{(continued)}\\\\", "\\toprule", header + " \\\\", "\\midrule",
+            "\\endhead"] + body
     if rows[-1] == "\\midrule":
         rows = rows[:-1]
     return "\n".join(rows + ["\\bottomrule", "\\end{longtable}"]) + "\n"
@@ -245,7 +371,7 @@ def supplementary(R) -> None:
         alias = {"latent_dim": "latent", "learning_rate": "lr", "l2": "$\\ell_2$",
                  "alpha": "$\\alpha$", "max_depth": "max depth", "min_samples_leaf": "min leaf",
                  "max_leaf_nodes": "max leaf nodes", "hidden_layer_sizes": "hidden",
-                 "learning_rate_init": "lr"}
+                 "learning_rate_init": "lr", "d_model": "width", "dropout": "dropout"}
 
         def show(v):
             if v is None:
@@ -259,7 +385,7 @@ def supplementary(R) -> None:
             for k in grid[0])
 
     body = [f"{m} & {axes(GRIDS['benchmark'][m])} & {axes(GRIDS['field'][m])} \\\\"
-            for m in ("ACTRN", "Ridge", "Random forest", "HGB", "MLP")]
+            for m in ("ACTRN", "Ridge", "Random forest", "HGB", "MLP") + tuple(SEQ)]
     text = _longtable("p{0.16\\linewidth}p{0.38\\linewidth}p{0.38\\linewidth}",
                       "Tuning grids. Each model family chooses among its eight configurations and "
                       "their averaged prediction, by validation regret on the benchmark and by "
@@ -272,8 +398,21 @@ def supplementary(R) -> None:
              "128 windows and joint ridge penalties $\\{1, 3, 10, 30, 100, 300, 1000, 3000\\}$; random "
              "forest 240 trees with maximum feature fraction 0.8; HGB 180 iterations with $\\ell_2$ "
              "regularisation 1.0; MLP at most 700 iterations with early stopping on 15\\% of the "
-             "training data and patience 35.\n")
+             "training data and patience 35; deep sequence models trained by mean squared error "
+             "with Adam (weight decay $10^{-4}$), mini-batches of 128, at most 300 epochs and early "
+             "stopping after 30 epochs without validation improvement, two layers, four attention "
+             "heads for the attention-based models, Autoformer moving-average kernel 5 and label "
+             "length 5, Reformer bucket size 4 with two hashing rounds.\n")
     (OUT / "supp_grids.tex").write_text(text)
+
+    cost = fit_minutes(R["runs"])
+    body = [f"{NAME[f]} & {cost['base'][f]:.1f} & {cost['channel'][f]:.1f} \\\\" for f in FAMILIES]
+    (OUT / "supp_cost.tex").write_text(_longtable(
+        "lrr", "Time to fit the nine candidates of a model family in one repeat and predict the "
+        "validation and test trajectories and candidate libraries (median over 20 repeats, minutes "
+        "on one CPU thread). Jobs ran in parallel on a shared server, so the times indicate orders "
+        "of magnitude only.", "tab:s-cost",
+        "Model & Base population & Channelised population", body))
 
     runs = R["runs"]
     out = []
@@ -284,11 +423,31 @@ def supplementary(R) -> None:
         piv = sub.pivot(index="repeat", columns="family", values="decision_regret_pct")[FAMILIES]
         body = [f"{int(rep)} & " + " & ".join(f"{v:.2f}" for v in row) + " \\\\"
                 for rep, row in piv.iterrows()]
-        out.append(_longtable("r" + "r" * len(FAMILIES),
-                              f"Relative regret (\\%) per registered repeat index $r$, {title}.",
-                              f"tab:s-repeats-{st}",
-                              "Repeat & " + " & ".join(SHORT[f] for f in FAMILIES), body))
+        out.append("{\\scriptsize\\setlength{\\tabcolsep}{2pt}\n" + _longtable(
+            "r" + "r" * len(FAMILIES),
+            f"Relative regret (\\%) per registered repeat index $r$, {title}.",
+            f"tab:s-repeats-{st}", "$r$ & " + " & ".join(SHORT[f] for f in FAMILIES), body) + "}")
     (OUT / "supp_repeats.tex").write_text("\n".join(out))
+
+    sens = sensitivity_summary(R["sensitivity"])
+    labels = {"latent_dim": "latent dimension $d$", "l2": "$\\ell_2$ penalty $\\lambda_2$",
+              "ensemble": "ensemble size", "learning_rate": "learning rate"}
+    body = []
+    for axis, label in labels.items():
+        for i, v in enumerate(sens[axis]["base"]):
+            b, c = sens[axis]["base"][v], sens[axis]["channelised"][v]
+            mark = "*" if np.isclose(float(v), SENS_DEFAULT[axis]) else ""
+            value = (f"$10^{{{round(np.log10(float(v)))}}}$" if axis == "l2" else f"{float(v):g}")
+            body.append(f"{label if i == 0 else ''} & {value}{mark} & "
+                        f"{b['decision_regret_pct']:.3f} & {b['nmae_pct']:.2f} & "
+                        f"{c['decision_regret_pct']:.3f} & {c['nmae_pct']:.2f} \\\\")
+        body.append("\\midrule")
+    (OUT / "supp_sensitivity.tex").write_text(_longtable(
+        "llrrrr", "Hyperparameter sensitivity of ACTRN: one hyperparameter is changed at a time "
+        "around the default configuration (marked *); mean test regret (\\%) and NMAE (\\%) "
+        "over 20 repeats.", "tab:s-sensitivity",
+        "Hyperparameter & Value & Base regret & Base NMAE & Channelised regret & "
+        "Channelised NMAE", body))
 
     s, n = R["summary"], R["nmae_sel"]
     body = []

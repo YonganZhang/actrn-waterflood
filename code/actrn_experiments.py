@@ -52,6 +52,7 @@ from action_conditioned_decision import (
     simulate_dataset,
 )
 from actrn_model import ACTRN
+from actrn_sequence_baselines import SEQUENCE_KINDS, SequenceModel
 from actrn_stats import BOOTSTRAP_SEED, paired_statistics, summarize
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,6 +98,8 @@ GRIDS = {
                      min_samples_leaf=[12, 30]),
         "MLP": _grid(hidden_layer_sizes=[(72, 48), (128, 64)], alpha=[2e-4, 1e-3],
                      learning_rate_init=[1e-3, 3e-4]),
+        **{k: _grid(d_model=[32, 64], learning_rate=[1e-3, 3e-3], dropout=[0.0, 0.1])
+           for k in SEQUENCE_KINDS},
     },
     "field": {
         "ACTRN": _grid(latent_dim=[8, 16], learning_rate=[5e-4, 1e-3], l2=[0.01, 0.1]),
@@ -106,6 +109,8 @@ GRIDS = {
                      min_samples_leaf=[5, 12]),
         "MLP": _grid(hidden_layer_sizes=[(32, 16), (72, 48)], alpha=[2e-4, 1e-2],
                      learning_rate_init=[1e-3, 3e-4]),
+        **{k: _grid(d_model=[16, 32], learning_rate=[1e-3, 3e-3], dropout=[0.1, 0.3])
+           for k in SEQUENCE_KINDS},
     },
 }
 
@@ -127,6 +132,8 @@ def family_kind(family: str) -> tuple[str, str]:
     """Return (model kind, baseline feature set) for a family name."""
     if family.startswith("ACTRN"):
         return "ACTRN", ""
+    if family in SEQUENCE_KINDS:
+        return family, "sequence"
     if family.endswith(" (engineered)"):
         return family.removesuffix(" (engineered)"), "engineered"
     return family, "raw"
@@ -193,6 +200,9 @@ def _fit_benchmark(kind, features, params, seed, overrides, h, a, y, cid, s):
         model = make_actrn("benchmark", params, seed, **overrides)
         return model.fit(h[tr], a[tr], y[tr], validation_data=(h[va], a[va], y[va]),
                          context_ids=cid[tr], validation_context_ids=cid[va])
+    if features == "sequence":
+        return SequenceModel(kind, seed=seed, params=params).fit(
+            h[tr], a[tr], y[tr], validation_data=(h[va], a[va], y[va]))
     return FlatModel(kind, seed=seed, params=params, features=features).fit(h[tr], a[tr], y[tr])
 
 
@@ -204,16 +214,19 @@ def benchmark_job(spec: dict) -> dict:
         repeat, population, response, spec["seed_base"])
     kind, features = family_kind(family)
     s = {**s, "train": training_subset(cid, s["train"], spec.get("subset"))}
-    grid = GRIDS["benchmark"][kind][: spec["grid_limit"]]
-    wanted = spec.get("candidates") or list(range(len(grid))) + [ENSEMBLE]
+    if "params" in spec:          # a single fixed configuration (sensitivity analysis)
+        grid, wanted = [spec["params"]], [0]
+    else:
+        grid = GRIDS["benchmark"][kind][: spec["grid_limit"]]
+        wanted = spec.get("candidates") or list(range(len(grid))) + [ENSEMBLE]
     fit_ids = list(range(len(grid))) if ENSEMBLE in wanted else list(wanted)
     seed = 42 + repeat
     va, te = s["validation"], s["test"]
     preds = {}
     t0 = time.perf_counter()
     for c in fit_ids:
-        model = _fit_benchmark(kind, features, grid[c], seed, ABLATIONS.get(family, {}),
-                               h, a, y, cid, s)
+        overrides = {**ABLATIONS.get(family, {}), **spec.get("overrides", {})}
+        model = _fit_benchmark(kind, features, grid[c], seed, overrides, h, a, y, cid, s)
         preds[c] = {"val": model.predict(h[va], a[va]), "test": model.predict(h[te], a[te]),
                     "val_sets": candidate_predictions(model, val_sets),
                     "test_sets": candidate_predictions(model, test_sets)}
@@ -381,6 +394,10 @@ def field_fit_family(family: str, seed: int, blocks: dict, grid_limit: int):
     for params in GRIDS["field"][kind][:grid_limit]:
         if kind == "ACTRN":
             model = make_actrn("field", params, seed)
+            model.fit(hist[tr], act[tr], target[tr],
+                      validation_data=(hist[va], act[va], target[va]))
+        elif features == "sequence":
+            model = SequenceModel(kind, seed=seed, params=params, relative_oil=True)
             model.fit(hist[tr], act[tr], target[tr],
                       validation_data=(hist[va], act[va], target[va]))
         else:

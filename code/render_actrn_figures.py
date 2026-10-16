@@ -48,18 +48,25 @@ _register_times_new_roman()
 
 from action_conditioned_decision import allocate_budget, make_reservoir, rollout  # noqa: E402
 import render_p17_full_figure_suite as context  # noqa: E402
+from make_actrn_tables import read_ext  # noqa: E402
 
 BLUE, SKY, YELLOW, CORAL = "#376795", "#72BCD5", "#FFD06F", "#E76254"
 NAVY, PALE, GREY, DARK = "#1E466E", "#AADCE0", "#A9A9A9", "#333333"
 ORANGE = "#EF8A47"
 RAW = ["Ridge", "Random forest", "HGB", "MLP"]
+SEQ = ["RNN", "LSTM", "Transformer", "Autoformer", "Reformer"]
 ENG = [f"{m} (engineered)" for m in RAW]
-ORDER = RAW + ENG + ["ACTRN"]
+ORDER = RAW + SEQ + ENG + ["ACTRN"]
+BASELINES = RAW + SEQ + ENG
 N_REPEATS = 20
+EXTENSION = PROC / "actrn_v4_ext"
 LABEL = {"Ridge": "Ridge", "Random forest": "RF", "HGB": "HGB", "MLP": "MLP",
-         "ACTRN": "ACTRN", "Persistence": "Persistence"}
+         "RNN": "RNN", "LSTM": "LSTM", "Transformer": "Transf.", "Autoformer": "Autof.",
+         "Reformer": "Reform.", "ACTRN": "ACTRN", "Persistence": "Persistence"}
 LABEL.update({f"{m} (engineered)": f"{LABEL[m]}+F" for m in RAW})
 BASE_COLOR = {"Ridge": GREY, "Random forest": SKY, "HGB": YELLOW, "MLP": ORANGE,
+              "RNN": "#B39DDB", "LSTM": "#7E57C2", "Transformer": "#66BB6A",
+              "Autoformer": "#2E7D32", "Reformer": "#A5D6A7",
               "ACTRN": BLUE, "Persistence": "#BDBDBD"}
 COLOR = {**BASE_COLOR, **{f"{m} (engineered)": BASE_COLOR[m] for m in RAW}}
 
@@ -117,6 +124,23 @@ def read_results(results: Path) -> dict:
         if rows is not None and len(frame) != rows:
             raise ValueError(f"{name}: expected {rows} rows, got {len(frame)}")
         frames[name.removesuffix(".csv")] = frame
+    ext = {name: read_ext(f"{name}.csv") for name in
+           ("sequence_runs", "sequence_decisions", "sequence_summary", "sequence_field_metrics")}
+    ext["sensitivity_hyperparameters"] = pd.read_csv(EXTENSION / "sensitivity_hyperparameters.csv")
+    frames["benchmark_runs"] = pd.concat([frames["benchmark_runs"], ext["sequence_runs"]],
+                                         ignore_index=True)
+    frames["benchmark_decisions"] = pd.concat([frames["benchmark_decisions"],
+                                               ext["sequence_decisions"]], ignore_index=True)
+    frames["benchmark_summary"] = pd.concat([frames["benchmark_summary"],
+                                             ext["sequence_summary"]], ignore_index=True)
+    persistence = frames["field_rolling_metrics"][["fold", "test_start", "test_end"]]
+    seq_field = ext["sequence_field_metrics"].merge(persistence.drop_duplicates("fold"), on="fold")
+    frames["field_rolling_metrics"] = pd.concat([frames["field_rolling_metrics"], seq_field],
+                                                ignore_index=True)
+    frames["sensitivity"] = ext["sensitivity_hyperparameters"]
+    frames["selection_summary"] = pd.concat(
+        [pd.read_csv(results / "benchmark_summary_nmae_selection.csv"),
+         read_ext("sequence_summary_nmae_selection.csv")], ignore_index=True)
     runs = frames["benchmark_runs"]
     runs = runs[runs["response"] == "exp"]
     for population, sub in runs.groupby("population"):
@@ -289,16 +313,17 @@ def paired(ax, runs, metric, other, ylabel):
     style_axis(ax)
 
 
-def strongest(summary, metric, population="base"):
-    s = summary[(summary["population"] == population) & summary["family"].isin(RAW + ENG)]
+def strongest(summary, metric, population="base", families=None):
+    s = summary[(summary["population"] == population) & (summary["response"] == "exp")
+                & summary["family"].isin(families or BASELINES)]
     return str(s.loc[s[f"{metric}_mean"].idxmin(), "family"])
 
 
 def figure_prediction(runs, summary):
     runs = runs[runs["population"] == "base"]
     other = strongest(summary, "nmae_pct")
-    fig, (a, b, c) = plt.subplots(1, 3, figsize=(7.2, 2.7), constrained_layout=True,
-                                  gridspec_kw={"width_ratios": [1.35, 0.6, 1.35]})
+    fig, (a, b, c) = plt.subplots(1, 3, figsize=(7.2, 2.9), constrained_layout=True,
+                                  gridspec_kw={"width_ratios": [1.5, 0.55, 1.5]})
     box_strip(a, runs, "nmae_pct", ORDER)
     a.set_ylabel("NMAE (%)")
     panel(a, "a")
@@ -358,47 +383,97 @@ def figure_decision(runs, summary, decisions, dependence):
     return comparators
 
 
-def figure_learning_curve(curve):
-    families = ["ACTRN", "ACTRN linear response", "Ridge (engineered)", "HGB (engineered)"]
-    style = {"ACTRN": (BLUE, "o", "-", "ACTRN"),
-             "ACTRN linear response": (SKY, "s", "--", "ACTRN, linear response"),
-             "Ridge (engineered)": (GREY, "^", "-", "Ridge+F"),
-             "HGB (engineered)": ("#D9A21B", "v", "-", "HGB+F")}
-    size = {"8x18x6": 864, "16x18x6": 1728, "32x18x3": 1728, "32x18x6": 3456}
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.9), constrained_layout=True)
-    for ax, (population, title, letter) in zip(axes, (("base", "Base population", "a"),
-                                                      ("channelised", "Channelised population",
-                                                       "b"))):
-        sub = curve[curve["population"] == population]
-        mean = sub.groupby(["family", "train_subset"])["decision_regret_pct"].mean()
-        for f in families:
-            color, marker, ls, label = style[f]
-            xs = [864, 1728, 3456]
-            ys = [mean.loc[(f, "8x18x6")], mean.loc[(f, "16x18x6")], mean.loc[(f, "32x18x6")]]
-            ax.plot(xs, ys, color=color, marker=marker, ls=ls, lw=1.8 if f == "ACTRN" else 1.1,
-                    ms=5, label=label)
-            ax.scatter([size["32x18x3"]], [mean.loc[(f, "32x18x3")]], marker=marker,
-                       facecolor="white", edgecolor=color, s=30, zorder=4)
-        ax.set_xscale("log", base=2)
-        ax.set_xticks([864, 1728, 3456])
-        ax.set_xticklabels(["864", "1728", "3456"])
-        ax.set_xlabel("Simulated training trajectories")
-        ax.set_ylabel("Mean relative regret (%)")
-        ax.set_ylim(bottom=0)
-        ax.set_title(title, fontsize=9.5, loc="left")
-        style_axis(ax)
-        panel(ax, letter, x=-0.17)
-    handles, labels = axes[0].get_legend_handles_labels()
+def figure_sensitivity(curve, sens, summary, selection):
+    """Sensitivity experiment: training data, four hyperparameters and the selection rule."""
+    pops = (("base", "Base", BLUE, "o"), ("channelised", "Channelised", CORAL, "s"))
+    best = {p: summary[(summary.population == p) & (summary.response == "exp")
+                       & summary.family.isin(BASELINES)].set_index("family")
+            ["decision_regret_pct_mean"].min() for p, *_ in pops}
+    fig, axes = plt.subplots(2, 3, figsize=(7.2, 4.9), constrained_layout=True)
+    ax = axes.ravel()
+
+    def reference(a):
+        for p, label, color, _ in pops:
+            a.axhline(best[p], color=color, lw=0.9, ls="--", alpha=0.8)
+        a.set_ylim(0, None)
+        style_axis(a)
+
+    size = {"8x18x6": 864, "16x18x6": 1728, "32x18x6": 3456}
+    for p, label, color, marker in pops:
+        mean = curve[(curve.population == p) & (curve.family == "ACTRN")].groupby(
+            "train_subset")["decision_regret_pct"].mean()
+        ax[0].plot(list(size.values()), [mean[k] for k in size], color=color, marker=marker,
+                   ms=4.5, lw=1.4, label=label)
+        ax[0].scatter([1728], [mean["32x18x3"]], marker=marker, facecolor="white",
+                      edgecolor=color, s=26, zorder=4)
+    ax[0].set_xscale("log", base=2)
+    ax[0].set_xticks([864, 1728, 3456])
+    ax[0].set_xticklabels(["864", "1728", "3456"])
+    ax[0].set_xlabel("Training trajectories")
+    reference(ax[0])
+    axes_spec = (("latent_dim", "Latent dimension $d$", True),
+                 ("l2", r"$\ell_2$ penalty $\lambda_2$", True),
+                 ("ensemble", "Ensemble size", False),
+                 ("learning_rate", "Learning rate", True))
+    default = {"latent_dim": 16, "l2": 1e-3, "ensemble": 5, "learning_rate": 0.002}
+    for a, (axis, xlabel, logx) in zip(ax[1:5], axes_spec):
+        others = [k for k in default if k != axis]
+        sub = sens.copy()
+        for k in others:
+            sub = sub[np.isclose(sub[f"cfg_{k}"], default[k])]
+        for p, label, color, marker in pops:
+            m = sub[sub.population == p].groupby(f"cfg_{axis}")["decision_regret_pct"].mean()
+            a.plot(m.index, m.values, color=color, marker=marker, ms=4.5, lw=1.4, label=label)
+        if logx:
+            a.set_xscale("log", base=2 if axis == "latent_dim" else 10)
+        if axis == "latent_dim":
+            a.set_xticks([4, 8, 16, 32, 64])
+            a.set_xticklabels(["4", "8", "16", "32", "64"])
+        if axis == "ensemble":
+            a.set_xticks([1, 2, 5, 10])
+        if axis == "learning_rate":
+            a.set_xticks([5e-4, 1e-3, 2e-3, 5e-3])
+            a.set_xticklabels(["0.0005", "0.001", "0.002", "0.005"])
+            a.xaxis.set_minor_formatter(mticker.NullFormatter())
+        a.axvline(default[axis], color="#999999", lw=0.7, ls=":")
+        a.set_xlabel(xlabel)
+        reference(a)
+    sel = selection.set_index(["population", "response", "family"])
+    reg = summary.set_index(["population", "response", "family"])
+    x = np.arange(2)
+    for i, (p, label, color, _) in enumerate(pops):
+        bl = [f for f in BASELINES]
+        vals_regret = [reg.loc[(p, "exp", "ACTRN"), "decision_regret_pct_mean"],
+                       reg.loc[(p, "exp"), "decision_regret_pct_mean"].loc[bl].min()]
+        vals_nmae = [sel.loc[(p, "exp", "ACTRN"), "decision_regret_pct_mean"],
+                     sel.loc[(p, "exp"), "decision_regret_pct_mean"].loc[bl].min()]
+        ax[5].bar(x + (i - 0.5) * 0.38, [vals_regret[0], vals_nmae[0]], width=0.36,
+                  color=color, label=f"{label}: ACTRN")
+        ax[5].scatter(x + (i - 0.5) * 0.38, [vals_regret[1], vals_nmae[1]], marker="_",
+                      s=260, color=DARK, lw=1.6, zorder=4,
+                      label="best baseline" if i == 0 else None)
+    ax[5].set_xticks(x)
+    ax[5].set_xticklabels(["by validation\nregret", "by validation\nNMAE"])
+    ax[5].set_xlabel("Candidate selection rule")
+    ax[5].set_ylim(0, None)
+    style_axis(ax[5])
+    for a, letter in zip(ax, "abcdef"):
+        a.set_ylabel("Mean relative regret (%)")
+        panel(a, letter, x=-0.3)
+    handles, labels = ax[1].get_legend_handles_labels()
+    handles += [Line2D([0], [0], color="#777777", ls="--", lw=0.9),
+                Line2D([0], [0], marker="_", color=DARK, ls="none", ms=12, mew=1.6)]
+    labels += ["best baseline (full data, default rule)", "best baseline under the same rule"]
     fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=4,
-               frameon=False, fontsize=8)
-    save(fig, "actrn_learning_curve")
+               frameon=False, fontsize=7.5)
+    save(fig, "actrn_sensitivity")
 
 
 # ----------------------------------------------------------------- Figure 7
 def figure_field(metrics, decision, backtest, case):
     mean = metrics.groupby("family")["nmae_pct"].mean()
-    best_raw, best_eng = mean.loc[RAW].idxmin(), mean.loc[ENG].idxmin()
-    order = ["Persistence", best_raw, best_eng, "ACTRN"]     # panel b shows every model
+    best = [mean.loc[group].idxmin() for group in (RAW, SEQ, ENG)]
+    order = ["Persistence"] + best + ["ACTRN"]     # panel b shows every model
     fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.6), constrained_layout=True)
     a, b, c, d = axes.ravel()
     for f in order:
@@ -466,7 +541,8 @@ def main() -> None:
     pred_other = figure_prediction(r["benchmark_runs"], r["benchmark_summary"])
     dec_other = figure_decision(r["benchmark_runs"], r["benchmark_summary"],
                                 r["benchmark_decisions"], r["benchmark_state_dependence"])
-    figure_learning_curve(r["benchmark_learning_curve"])
+    figure_sensitivity(r["benchmark_learning_curve"], r["sensitivity"], r["benchmark_summary"],
+                       r["selection_summary"])
     figure_field(r["field_rolling_metrics"], r["field_case_decision"],
                  r["field_case_backtest"], r["case"])
     print(json.dumps({"figures": str(FIGURES), "prediction_comparator": pred_other,
