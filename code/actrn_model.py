@@ -18,8 +18,12 @@ linear paths are fitted jointly by ridge and the nonlinear paths learn the resid
 Nonlinear paths start at zero output, are early-stopped on validation data and averaged
 over an ensemble of initialisation seeds.
 
-The registered 2026-07 and 2026-10 (v2) designs are preserved at git tags
-``actrn-v1-registered`` and ``actrn-v2-registered``.
+The history representation contains response proxies (within-window correlations and joint
+ridge coefficients of production increments on injector rates), so the interaction path can tell
+which injectors the producers currently respond to.
+
+Earlier designs are preserved at git tags ``actrn-v1-registered``, ``actrn-v2-registered`` and
+``actrn-v3-registered``.
 """
 from __future__ import annotations
 
@@ -128,7 +132,7 @@ class ACTRN:
         nonlinear: bool = True,
         contrastive: bool = True,
         action_features: str = "multiscale",
-        history_proxies: bool = True,
+        history_proxies: str = "full",
         level_alphas: tuple = (0.1, 0.3, 1, 3, 10, 30, 100, 300, 1000),
         action_alphas: tuple = (0.01, 0.1, 1, 10),
     ) -> None:

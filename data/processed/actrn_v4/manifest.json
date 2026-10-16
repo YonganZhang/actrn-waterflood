@@ -1,0 +1,104 @@
+{
+  "protocol": "_wiki-methodology/_top/_decisions/_0004-actrn-v4-protocol.md",
+  "protocol_sha256": "d28157f524e25d1c340214180c07e45bb734a9f9f4e3b6c0c9dc20bcec7794d2",
+  "quick": false,
+  "dev_seeds": false,
+  "environment": {
+    "python": "3.11.15",
+    "packages": {
+      "numpy": "2.4.6",
+      "pandas": "3.0.6",
+      "scikit-learn": "1.9.1",
+      "scipy": "1.17.1",
+      "pyarrow": "26.0.0"
+    },
+    "git_commit": "0d61e341a8df518084d2e0ba1234ba2220575815",
+    "code_dirty": true,
+    "code_dirty_paths": [
+      "D code/render_figures_tnr.py"
+    ]
+  },
+  "workers": 44,
+  "wall_seconds": 4180.302058079047,
+  "benchmark": {
+    "jobs": 1300,
+    "fit_seconds_total": 147677.21999667562
+  },
+  "field": {
+    "jobs": 36,
+    "case": {
+      "case_decision_date": "2015-05-24",
+      "case_index": 361,
+      "case_level_m3": 20787.54,
+      "latest_candidate_block": "2015-03-29",
+      "budget_m3": 603918.083755,
+      "library_size": 52,
+      "selected_source_block": "2008-09-21",
+      "selected_predicted_cumulative_m3": 213643.34600930172,
+      "candidate_predicted_cumulative_range_m3": [
+        119989.60204310056,
+        213643.34600930172
+      ],
+      "candidates_with_any_clipped_step": 0,
+      "implemented_schedule_total_m3": 528094.58032625,
+      "implemented_predicted_cumulative_m3": 167665.8743395917,
+      "implemented_observed_cumulative_m3": 149564.87,
+      "clip_bounds_m3": [
+        0.0,
+        62641.81
+      ],
+      "case_candidate": "{\"latent_dim\": 16, \"learning_rate\": 0.0005, \"l2\": 0.01}",
+      "case_validation_nmae_pct": 29.581205534167914
+    }
+  },
+  "seeds": {
+    "data": "20260716 + 1009*repeat",
+    "repeats": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29
+    ],
+    "model": "42 + repeat",
+    "ensemble_members": "model seed + 1000*k, k = 0..4",
+    "test_candidates": "data_seed + 1776",
+    "validation_candidates": "data_seed + 2999",
+    "field_model": "242 + fold",
+    "field_case_model": 747,
+    "bootstrap": 20261016
+  },
+  "outputs": {
+    "benchmark_decisions.csv": "5455d4e43685246f2c208f0c2e3f164bfd0635bafc809d2ecf4d79a7b702cea3",
+    "benchmark_learning_curve.csv": "d7e79c165925dee98a770bd39003216075879ff4a11ec23ea79d52b278cedbcd",
+    "benchmark_runs.csv": "63a7a55a9216db4760dab2ea476ddd28bdfe9d8f7f48685fda570e6dd7a79a4b",
+    "benchmark_state_dependence.csv": "f943c9236199910a7915a3d74d171c33354c544232103d01544515e5f99e9667",
+    "benchmark_stats.json": "11430c6b1d5b928d53804ac5e3699400daef9f104f295c594336d450580d6be4",
+    "benchmark_summary.csv": "630416bfe112905dd76dca1eed1bf83ca4a28f16b75ef41c70e8401d362f99ba",
+    "benchmark_summary_nmae_selection.csv": "021e0cf81a574451e016d5656f09f666e50d244e780dc257713da3b863768a38",
+    "benchmark_tuning.csv": "25b219dc9911a43ee6ec35c4d0f17c4786636753e631c44d5ff16934eabd643a",
+    "field_case_backtest.csv": "a6316cc76f3c830aa72989b6448db4fe55195bf874828ea302cde6a5988d52ca",
+    "field_case_candidates.csv": "f5082f480e24d367fe0f709a28ff90ffebf45e1bf42c684375b6fdfc092e87bd",
+    "field_case_decision.csv": "92c0d99aa331c9d89ff32dc0cc2a758c30a941e993e024176e8f0e1096bc0bc8",
+    "field_case_summary.json": "07e4ce67906208958eb890e90a036a8c66a97f834e58e3ee7ac756930aed345d",
+    "field_rolling_metrics.csv": "1ea33e55e8245bdeb91d3e7af52e69bb0d2acdb330098fa5c17383ceaa98585a",
+    "field_summary.csv": "98643040910102a1957a48cce19ce6df16d9ea04c573c2ba890ae5821d58757f",
+    "field_tuning.csv": "11fee9ca239a855e5581433156b19689aa78f95a4b31854aef55d14228176cf0"
+  },
+  "command": "python code/actrn_experiments.py --out data/processed/actrn_v4 --workers 44"
+}

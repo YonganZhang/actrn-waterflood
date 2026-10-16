@@ -1,12 +1,12 @@
-"""Render the ACTRN manuscript data figures (Figures 2 and 4-7) from registered v3 outputs.
+"""Render the ACTRN manuscript data figures (Figures 2-8) from registered v4 outputs.
 
-Reads ``data/processed/actrn_v3`` (written by ``actrn_experiments.py``) plus the Volve
+Reads ``data/processed/actrn_v4`` (written by ``actrn_experiments.py``) plus the Volve
 context tables, and writes PDF/PNG pairs to ``paper/fuel_2026/figures``.  Figure 3 is
 the field-state figure from ``render_p17_full_figure_suite.py``; Figure 1 is the editable
 PowerPoint schematic.  No fallback or placeholder data are permitted.
 
 Usage (from the project root):
-    .venv/bin/python code/render_actrn_figures.py [--results data/processed/actrn_v3]
+    .venv/bin/python code/render_actrn_figures.py [--results data/processed/actrn_v4]
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ ORANGE = "#EF8A47"
 RAW = ["Ridge", "Random forest", "HGB", "MLP"]
 ENG = [f"{m} (engineered)" for m in RAW]
 ORDER = RAW + ENG + ["ACTRN"]
-N_REPEATS = 10
+N_REPEATS = 20
 LABEL = {"Ridge": "Ridge", "Random forest": "RF", "HGB": "HGB", "MLP": "MLP",
          "ACTRN": "ACTRN", "Persistence": "Persistence"}
 LABEL.update({f"{m} (engineered)": f"{LABEL[m]}+F" for m in RAW})
@@ -107,7 +107,8 @@ def save(fig, stem):
 
 def read_results(results: Path) -> dict:
     expected = {"benchmark_runs.csv": None, "benchmark_decisions.csv": None,
-                "benchmark_summary.csv": None, "field_rolling_metrics.csv": 40,
+                "benchmark_summary.csv": None, "benchmark_state_dependence.csv": None,
+                "benchmark_learning_curve.csv": None, "field_rolling_metrics.csv": 40,
                 "field_case_decision.csv": 8, "field_case_backtest.csv": 8,
                 "field_case_candidates.csv": None}
     frames = {}
@@ -118,12 +119,15 @@ def read_results(results: Path) -> dict:
         frames[name.removesuffix(".csv")] = frame
     runs = frames["benchmark_runs"]
     runs = runs[runs["response"] == "exp"]
-    missing = set(ORDER) - set(runs["family"])
-    if missing or runs.groupby("family").size().loc[ORDER].ne(N_REPEATS).any():
-        raise ValueError(f"benchmark runs incomplete: missing {sorted(missing)}")
+    for population, sub in runs.groupby("population"):
+        missing = set(ORDER) - set(sub["family"])
+        if missing or sub.groupby("family").size().loc[ORDER].ne(N_REPEATS).any():
+            raise ValueError(f"{population}: benchmark runs incomplete, missing {sorted(missing)}")
     frames["benchmark_runs"] = runs
     dec = frames["benchmark_decisions"]
     frames["benchmark_decisions"] = dec[dec["response"] == "exp"]
+    summary = frames["benchmark_summary"]
+    frames["benchmark_summary"] = summary[summary["response"] == "exp"]
     frames["case"] = json.loads((results / "field_case_summary.json").read_text())
     return frames
 
@@ -285,12 +289,13 @@ def paired(ax, runs, metric, other, ylabel):
     style_axis(ax)
 
 
-def strongest(summary, metric):
-    s = summary[(summary["response"] == "exp") & summary["family"].isin(RAW + ENG)]
+def strongest(summary, metric, population="base"):
+    s = summary[(summary["population"] == population) & summary["family"].isin(RAW + ENG)]
     return str(s.loc[s[f"{metric}_mean"].idxmin(), "family"])
 
 
 def figure_prediction(runs, summary):
+    runs = runs[runs["population"] == "base"]
     other = strongest(summary, "nmae_pct")
     fig, (a, b, c) = plt.subplots(1, 3, figsize=(7.2, 2.7), constrained_layout=True,
                                   gridspec_kw={"width_ratios": [1.35, 0.6, 1.35]})
@@ -306,41 +311,87 @@ def figure_prediction(runs, summary):
     return other
 
 
-def figure_decision(runs, summary, decisions):
-    other = strongest(summary, "decision_regret_pct")
-    s = summary[summary["response"] == "exp"].set_index("family").loc[ORDER]
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.6), constrained_layout=True)
-    a, b, c, d = axes.ravel()
-    data = [decisions.loc[decisions["family"] == f, "decision_regret_pct"].to_numpy()
-            for f in ORDER]
-    v = a.violinplot(data, positions=np.arange(len(ORDER)), showmedians=True,
-                     showextrema=False, widths=0.85)
-    for body, f in zip(v["bodies"], ORDER):
-        body.set_facecolor(COLOR[f])
-        body.set_edgecolor(COLOR[f])
-        body.set_alpha(0.85 if f == "ACTRN" else (0.3 if f in ENG else 0.55))
-    v["cmedians"].set_color(DARK)
-    a.set_xticks(np.arange(len(ORDER)))
-    a.set_xticklabels([LABEL[f] for f in ORDER], rotation=40, ha="right")
-    a.set_ylabel("Relative regret (%)")
-    style_axis(a)
-    panel(a, "a")
-    paired(b, runs, "decision_regret_pct", other, "Mean relative regret (%)")
-    panel(b, "b")
-    for ax, col, ylabel, letter in ((c, "optimal_selection_pct", "Exact optimum selection (%)", "c"),
-                                    (d, "top_decile_selection_pct", "Top-decile selection (%)", "d")):
-        for i, f in enumerate(ORDER):
-            ax.errorbar(i, s.loc[f, f"{col}_mean"], yerr=s.loc[f, f"{col}_std"], fmt="o",
-                        ms=6 if f == "ACTRN" else 4.5, color=COLOR[f],
-                        mfc=COLOR[f] if f not in ENG else "white", capsize=2.5, lw=1.0)
-        ax.set_xticks(np.arange(len(ORDER)))
-        ax.set_xticklabels([LABEL[f] for f in ORDER], rotation=40, ha="right")
-        ax.set_ylabel(ylabel)
-        ax.set_ylim(bottom=0)
-        style_axis(ax)
-        panel(ax, letter)
+def regret_means(ax, runs, dep):
+    """Mean relative regret per family (log scale) with the model-free references."""
+    rep = runs.groupby("family")["decision_regret_pct"]
+    means, sds = rep.mean().loc[ORDER], rep.std().loc[ORDER]
+    x = np.arange(len(ORDER))
+    for i, f in enumerate(ORDER):
+        ax.errorbar(i, means[f], yerr=sds[f], fmt="o", ms=7 if f == "ACTRN" else 5,
+                    color=COLOR[f], mfc="white" if f in ENG else COLOR[f], capsize=2.5, lw=1.0,
+                    zorder=3)
+    per_repeat = dep.groupby("repeat")[["state_blind_regret_pct", "random_regret_pct"]].mean()
+    for col, ls, label in (("random_regret_pct", ":", "random candidate"),
+                           ("state_blind_regret_pct", "--", "state-blind reference")):
+        level = per_repeat[col].mean()
+        ax.axhline(level, color=CORAL if col.startswith("state") else GREY, lw=1.0, ls=ls)
+        ax.text(-0.3, level * 1.06, label, color=CORAL if col.startswith("state") else "#777777",
+                fontsize=7.5, ha="left", va="bottom")
+    ax.set_yscale("log")
+    ax.set_xlim(-0.6, len(ORDER) - 0.4)
+    ax.set_ylim(0.08, 9)
+    ax.set_yticks([0.1, 0.2, 0.5, 1, 2, 5])
+    ax.set_yticklabels(["0.1", "0.2", "0.5", "1", "2", "5"])
+    ax.set_xticks(x)
+    ax.set_xticklabels([LABEL[f] for f in ORDER], rotation=40, ha="right")
+    ax.set_ylabel("Mean relative regret (%)")
+    style_axis(ax)
+
+
+def figure_decision(runs, summary, decisions, dependence):
+    fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.8), constrained_layout=True,
+                             gridspec_kw={"width_ratios": [1.6, 0.75]})
+    comparators = {}
+    for row, (population, title) in enumerate((("base", "Base population"),
+                                               ("channelised", "Channelised population"))):
+        sub = runs[runs["population"] == population]
+        dep = dependence[(dependence["population"] == population)
+                         & (dependence["response"] == "exp")]
+        regret_means(axes[row, 0], sub, dep)
+        axes[row, 0].set_title(title, fontsize=9.5, loc="left", x=0.02)
+        panel(axes[row, 0], "ac"[row], x=-0.1)
+        other = strongest(summary, "decision_regret_pct", population)
+        comparators[population] = other
+        paired(axes[row, 1], sub, "decision_regret_pct", other, "Mean relative regret (%)")
+        panel(axes[row, 1], "bd"[row], x=-0.38)
     save(fig, "actrn_decision_performance")
-    return other
+    return comparators
+
+
+def figure_learning_curve(curve):
+    families = ["ACTRN", "ACTRN linear response", "Ridge (engineered)", "HGB (engineered)"]
+    style = {"ACTRN": (BLUE, "o", "-", "ACTRN"),
+             "ACTRN linear response": (SKY, "s", "--", "ACTRN, linear response"),
+             "Ridge (engineered)": (GREY, "^", "-", "Ridge+F"),
+             "HGB (engineered)": ("#D9A21B", "v", "-", "HGB+F")}
+    size = {"8x18x6": 864, "16x18x6": 1728, "32x18x3": 1728, "32x18x6": 3456}
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.9), constrained_layout=True)
+    for ax, (population, title, letter) in zip(axes, (("base", "Base population", "a"),
+                                                      ("channelised", "Channelised population",
+                                                       "b"))):
+        sub = curve[curve["population"] == population]
+        mean = sub.groupby(["family", "train_subset"])["decision_regret_pct"].mean()
+        for f in families:
+            color, marker, ls, label = style[f]
+            xs = [864, 1728, 3456]
+            ys = [mean.loc[(f, "8x18x6")], mean.loc[(f, "16x18x6")], mean.loc[(f, "32x18x6")]]
+            ax.plot(xs, ys, color=color, marker=marker, ls=ls, lw=1.8 if f == "ACTRN" else 1.1,
+                    ms=5, label=label)
+            ax.scatter([size["32x18x3"]], [mean.loc[(f, "32x18x3")]], marker=marker,
+                       facecolor="white", edgecolor=color, s=30, zorder=4)
+        ax.set_xscale("log", base=2)
+        ax.set_xticks([864, 1728, 3456])
+        ax.set_xticklabels(["864", "1728", "3456"])
+        ax.set_xlabel("Simulated training trajectories")
+        ax.set_ylabel("Mean relative regret (%)")
+        ax.set_ylim(bottom=0)
+        ax.set_title(title, fontsize=9.5, loc="left")
+        style_axis(ax)
+        panel(ax, letter, x=-0.17)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=4,
+               frameon=False, fontsize=8)
+    save(fig, "actrn_learning_curve")
 
 
 # ----------------------------------------------------------------- Figure 7
@@ -406,7 +457,7 @@ def figure_field(metrics, decision, backtest, case):
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--results", default=str(PROC / "actrn_v3"))
+    ap.add_argument("--results", default=str(PROC / "actrn_v4"))
     args = ap.parse_args()
     r = read_results(Path(args.results))
     figure_benchmark_design()
@@ -414,7 +465,8 @@ def main() -> None:
     figure_field_context()
     pred_other = figure_prediction(r["benchmark_runs"], r["benchmark_summary"])
     dec_other = figure_decision(r["benchmark_runs"], r["benchmark_summary"],
-                                r["benchmark_decisions"])
+                                r["benchmark_decisions"], r["benchmark_state_dependence"])
+    figure_learning_curve(r["benchmark_learning_curve"])
     figure_field(r["field_rolling_metrics"], r["field_case_decision"],
                  r["field_case_backtest"], r["case"])
     print(json.dumps({"figures": str(FIGURES), "prediction_comparator": pred_other,

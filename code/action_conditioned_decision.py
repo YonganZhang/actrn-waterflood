@@ -72,9 +72,18 @@ def injection_effect(action: np.ndarray, response: str = "exp") -> np.ndarray:
     raise ValueError(f"unknown benchmark response {response!r}")
 
 
-def make_reservoir(rng: np.random.Generator) -> Reservoir:
-    connectivity = rng.uniform(0.08, 0.65, size=(3, 2))
-    connectivity *= rng.uniform(0.65, 1.45, size=(1, 2))
+def make_reservoir(rng: np.random.Generator, population: str = "base") -> Reservoir:
+    """Reservoir parameters.  ``channelised``: each producer is connected to one injector by a
+    high-conductivity channel and only weakly to the other, so the best allocation of a fixed
+    injection volume differs strongly between reservoirs."""
+    if population == "base":
+        connectivity = rng.uniform(0.08, 0.65, size=(3, 2))
+        connectivity *= rng.uniform(0.65, 1.45, size=(1, 2))
+    elif population == "channelised":
+        connectivity = rng.uniform(0.02, 0.15, size=(3, 2))
+        connectivity[np.arange(3), rng.integers(0, 2, size=3)] += rng.uniform(0.55, 0.85, size=3)
+    else:
+        raise ValueError(f"unknown reservoir population {population!r}")
     return Reservoir(
         connectivity=connectivity,
         retention=rng.uniform(0.58, 0.86, size=3),
@@ -192,8 +201,21 @@ def simulate_dataset(
     seed: int = 20260716,
     return_context_ids: bool = False,
     response: str = "exp",
+    training_design: str = "variable",
+    population: str = "base",
 ) -> tuple:
+    """Known-truth dataset: several simulated schedules restarted from each sampled state.
+
+    ``training_design`` sets how the schedules of one state are drawn: ``variable`` gives each
+    its own total injection; ``matched`` gives all of them one common total, so their
+    differences are pure reallocation and retiming as in the fixed-budget decision; ``paired``
+    uses two totals per state, half of the schedules each.  The schedules are drawn from a
+    separate random stream, so geology, histories and decision libraries do not depend on it.
+    """
+    if training_design not in ("variable", "matched", "paired"):
+        raise ValueError(f"unknown training design {training_design!r}")
     rng = np.random.default_rng(seed)
+    design_rng = np.random.default_rng([seed, 1])
     if samples_per_reservoir % plans_per_context:
         raise ValueError(
             "samples_per_reservoir must be divisible by plans_per_context"
@@ -205,7 +227,7 @@ def simulate_dataset(
     context_ids = []
     contexts: list[DecisionContext] = []
     for reservoir_id in range(n_reservoirs):
-        reservoir = make_reservoir(rng)
+        reservoir = make_reservoir(rng, population)
         pressure = rng.uniform(0.20, 0.72, size=3)
         water = rng.uniform(0.02, 0.20, size=3)
         last_action = rng.uniform(0.35, 1.10, size=2)
@@ -239,8 +261,13 @@ def simulate_dataset(
         )
         for context_no, t in enumerate(eligible):
             history = rows[t - history_length : t]
-            for _ in range(plans_per_context):
-                plan = sample_plan(rng, horizon)
+            budgets = design_rng.uniform(0.60, 1.12, size=2) * horizon * 2
+            for plan_no in range(plans_per_context):
+                plan = sample_plan(rng, horizon)    # always drawn: keeps the main stream fixed
+                if training_design == "matched":
+                    plan = sample_plan(design_rng, horizon, budgets[0])
+                elif training_design == "paired":
+                    plan = sample_plan(design_rng, horizon, budgets[plan_no % 2])
                 truth = rollout(
                     reservoir, states[t], waters[t], plan, ages[t], response
                 )
@@ -313,10 +340,37 @@ def response_proxies(histories: np.ndarray, n_injectors: int = 2,
     return np.concatenate(features, axis=1)
 
 
-def history_features(histories: np.ndarray, proxies: bool = True) -> np.ndarray:
-    """ACTRN history representation x_H, optionally with the response proxies."""
-    base = encode_history(histories)
-    return np.c_[base, response_proxies(histories)] if proxies else base
+def regression_proxies(histories: np.ndarray, n_injectors: int = 2,
+                       ridge: float = 1.0) -> np.ndarray:
+    """Joint response descriptors: within the history window, ridge coefficients of every other
+    channel's increments on the current and previous rates of all injectors (standardised per
+    window).  Unlike the marginal correlations they separate the injectors' contributions."""
+    histories = np.asarray(histories, dtype=float)
+    rates = histories[:, :, :n_injectors]
+    x = np.concatenate([rates[:, 1:], rates[:, :-1]], axis=2)
+    y = np.diff(histories[:, :, n_injectors:], axis=1)
+    x = (x - x.mean(axis=1, keepdims=True)) / (x.std(axis=1, keepdims=True) + 1e-9)
+    y = (y - y.mean(axis=1, keepdims=True)) / (y.std(axis=1, keepdims=True) + 1e-9)
+    gram = np.einsum("ntp,ntq->npq", x, x) + ridge * np.eye(x.shape[2])[None]
+    return np.linalg.solve(gram, np.einsum("ntp,ntk->npk", x, y)).reshape(len(histories), -1)
+
+
+PROXY_SETS = ("full", "correlation", "none")
+
+
+def history_features(histories: np.ndarray, proxies: str = "full") -> np.ndarray:
+    """ACTRN history representation x_H: statistics plus response proxies rho(H_t).
+
+    ``full`` = correlation and regression proxies; ``correlation`` = correlations only;
+    ``none`` = statistics only."""
+    if proxies not in PROXY_SETS:
+        raise ValueError(f"unknown proxy set {proxies!r}")
+    parts = [encode_history(histories)]
+    if proxies in ("full", "correlation"):
+        parts.append(response_proxies(histories))
+    if proxies == "full":
+        parts.append(regression_proxies(histories))
+    return np.concatenate(parts, axis=1)
 
 
 def saturation_scale(actions: np.ndarray) -> np.ndarray:
@@ -476,31 +530,37 @@ def make_decision_sets(
     return decision_sets
 
 
+def candidate_predictions(model, decision_sets: list[dict]) -> list[np.ndarray]:
+    """Predicted trajectories of every candidate in every decision set."""
+    out = []
+    for item in decision_sets:
+        histories = np.repeat(item["context"].history[None, ...], len(item["plans"]), axis=0)
+        out.append(model.predict(histories, item["plans"]))
+    return out
+
+
 def score_decision_sets(model, decision_sets: list[dict]) -> tuple[dict, list[dict]]:
     """Score model-selected decisions against the same candidate-set truth."""
-    regrets = []
-    relative_regrets = []
-    exact = []
-    top_decile = []
+    return score_predictions(decision_sets, candidate_predictions(model, decision_sets))
+
+
+def score_predictions(decision_sets: list[dict],
+                      predictions: list[np.ndarray]) -> tuple[dict, list[dict]]:
+    """Score the candidates selected by predicted cumulative oil.
+
+    Besides regret relative to the best candidate, ``gain_capture_pct`` is the share of the
+    attainable gain over the average candidate, 100 (V_sel - V_mean) / (V_best - V_mean)."""
     details = []
-    for item in decision_sets:
+    for item, predicted in zip(decision_sets, predictions):
         context = item["context"]
-        plans = item["plans"]
-        truth = item["truth"]
-        n_candidates = len(plans)
-        histories = np.repeat(context.history[None, ...], n_candidates, axis=0)
-        predicted = model.predict(histories, plans)
-        truth_value = truth.sum(axis=1)
-        predicted_value = predicted.sum(axis=1)
+        truth_value = item["truth"].sum(axis=1)
+        predicted_value = np.asarray(predicted).sum(axis=1)
+        n_candidates = len(truth_value)
         best = int(np.argmax(truth_value))
         selected = int(np.argmax(predicted_value))
         regret = float(truth_value[best] - truth_value[selected])
-        regrets.append(regret)
-        relative_regrets.append(100 * regret / max(abs(truth_value[best]), 1e-8))
-        exact.append(best == selected)
+        mean_value = float(truth_value.mean())
         rank = int(np.sum(truth_value > truth_value[selected]) + 1)
-        is_top_decile = rank <= max(1, int(np.ceil(0.10 * n_candidates)))
-        top_decile.append(is_top_decile)
         details.append(
             {
                 "reservoir_id": context.reservoir_id,
@@ -508,20 +568,25 @@ def score_decision_sets(model, decision_sets: list[dict]) -> tuple[dict, list[di
                 "candidate_count": n_candidates,
                 "fixed_budget": context.budget,
                 "true_best_value": float(truth_value[best]),
+                "candidate_mean_value": mean_value,
                 "selected_true_value": float(truth_value[selected]),
                 "selected_predicted_value": float(predicted_value[selected]),
                 "decision_regret": regret,
-                "decision_regret_pct": relative_regrets[-1],
+                "decision_regret_pct": 100 * regret / max(abs(truth_value[best]), 1e-8),
+                "gain_capture_pct": 100 * (truth_value[selected] - mean_value)
+                / max(truth_value[best] - mean_value, 1e-12),
                 "selected_truth_rank": rank,
                 "optimal_selection": bool(best == selected),
-                "top_decile_selection": bool(is_top_decile),
+                "top_decile_selection": bool(rank <= max(1, int(np.ceil(0.10 * n_candidates)))),
             }
         )
+    frame = pd.DataFrame(details)
     summary = {
-        "decision_regret": float(np.mean(regrets)),
-        "decision_regret_pct": float(np.mean(relative_regrets)),
-        "optimal_selection_pct": float(100 * np.mean(exact)),
-        "top_decile_selection_pct": float(100 * np.mean(top_decile)),
+        "decision_regret": float(frame["decision_regret"].mean()),
+        "decision_regret_pct": float(frame["decision_regret_pct"].mean()),
+        "gain_capture_pct": float(frame["gain_capture_pct"].mean()),
+        "optimal_selection_pct": float(100 * frame["optimal_selection"].mean()),
+        "top_decile_selection_pct": float(100 * frame["top_decile_selection"].mean()),
     }
     return summary, details
 

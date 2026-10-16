@@ -9,11 +9,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "code"))
 
 from action_conditioned_decision import (  # noqa: E402
+    FlatModel,
     build_field_case_dataset,
     encode_actions,
+    history_features,
     injection_effect,
+    regression_proxies,
     response_proxies,
     saturation_scale,
+    score_decision_sets,
+    score_predictions,
+    simulate_dataset,
 )
 from actrn_model import ACTRN  # noqa: E402
 from actrn_experiments import (  # noqa: E402
@@ -111,10 +117,50 @@ def test_response_proxies_detect_a_connected_channel():
     assert np.all(np.abs(lag0[:, 0, 1]) < 0.9)
 
 
+def test_regression_proxies_separate_two_injectors():
+    rng = np.random.default_rng(11)
+    rates = rng.uniform(0.2, 1.0, size=(4, 10, 2))
+    follows_second = np.cumsum(0.9 * rates[:, :, 1:2], axis=1)   # increments follow injector 2
+    proxies = regression_proxies(np.concatenate([rates, follows_second], axis=2))
+    coef = proxies.reshape(4, 4, 1)[:, :, 0]                     # [u1_t, u2_t, u1_t-1, u2_t-1]
+    assert np.all(np.abs(coef[:, 1]) > 3 * np.abs(coef[:, 0]))
+
+
+def test_history_feature_sets_nest():
+    h = np.random.default_rng(2).normal(size=(5, 10, 8))
+    none, corr, full = (history_features(h, p).shape[1] for p in ("none", "correlation", "full"))
+    assert none < corr < full
+
+
+def test_default_training_design_and_population_leave_registered_data_unchanged():
+    a = simulate_dataset(n_reservoirs=3, seed=5, return_context_ids=True)
+    b = simulate_dataset(n_reservoirs=3, seed=5, return_context_ids=True,
+                         training_design="variable", population="base")
+    assert all(np.array_equal(x, y) for x, y in zip(a[:4], b[:4]))
+    m = simulate_dataset(n_reservoirs=3, seed=5, return_context_ids=True,
+                         training_design="matched")
+    assert np.array_equal(a[0], m[0])                            # same histories
+    totals = m[1].sum(axis=(1, 2))
+    for c in np.unique(m[5]):
+        assert np.ptp(totals[m[5] == c]) < 1e-9                  # one budget per state
+
+
+def test_prediction_based_scoring_matches_model_scoring():
+    h, a, y, g, ctx = simulate_dataset(n_reservoirs=4, seed=9)
+    from action_conditioned_decision import make_decision_sets
+    sets = make_decision_sets(ctx[:3], np.random.default_rng(1), 8, 20)
+    model = FlatModel("Ridge", params={"alpha": 1.0}, features="engineered").fit(h, a, y)
+    summary, details = score_decision_sets(model, sets)
+    preds = [model.predict(np.repeat(s["context"].history[None], 20, 0), s["plans"]) for s in sets]
+    assert summary == score_predictions(sets, preds)[0]
+    assert all(-1e9 < d["gain_capture_pct"] <= 100 + 1e-9 for d in details)
+
+
 def test_every_model_has_an_equal_eight_configuration_budget():
     for setting in ("benchmark", "field"):
         sizes = {name: len(grid) for name, grid in GRIDS[setting].items()}
         assert set(sizes.values()) == {8}
     assert set(ABLATIONS) == {"ACTRN w/o contrastive learning", "ACTRN w/o interaction",
-                              "ACTRN w/o response proxies", "ACTRN raw action input",
-                              "ACTRN linear response", "ACTRN concatenation interaction"}
+                              "ACTRN w/o response proxies", "ACTRN correlation proxies only",
+                              "ACTRN raw action input", "ACTRN linear response",
+                              "ACTRN concatenation interaction"}
